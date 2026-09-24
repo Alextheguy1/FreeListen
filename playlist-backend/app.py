@@ -101,4 +101,7 @@ if __name__ == "__main__":
     # 0.0.0.0 (not 127.0.0.1) so the Node container can reach this one over
     # the Docker network; for local (non-Docker) use it's still only reachable
     # from this machine unless you've explicitly opened the port up.
-    app.run(host="0.0.0.0", port=port)
+    # threaded=True: without it, Flask's dev server handles one request at a
+    # time, so a second person loading a playlist would just hang until the
+    # first one's multi-page Spotify fetch finished.
+    app.run(host="0.0.0.0", port=port, threaded=True)

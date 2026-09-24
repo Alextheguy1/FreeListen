@@ -12,7 +12,7 @@ const DENO_PATH = path.join(BIN_DIR, process.platform === "win32" ? "deno.exe" :
 const ASSET_BY_PLATFORM = {
   win32: "deno-x86_64-pc-windows-msvc.zip",
   darwin: process.arch === "arm64" ? "deno-aarch64-apple-darwin.zip" : "deno-x86_64-apple-darwin.zip",
-  linux: "deno-x86_64-unknown-linux-gnu.zip",
+  linux: process.arch === "arm64" ? "deno-aarch64-unknown-linux-gnu.zip" : "deno-x86_64-unknown-linux-gnu.zip",
 };
 
 function download(url, destPath) {
