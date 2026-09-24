@@ -1,0 +1,1274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FreeListen</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --card: #ffffff; --text: #1d1d1f; --muted: #6b6b70;
+    --border: #e2e0db; --accent: #ba478f; --accent-soft: #f5e6ef;
+    --sidebar-bg: #1a1c23; --sidebar-text: #a6abbd; --sidebar-active: #242631;
+    --status-downloading: #3b82f6; --status-completed: #22c55e;
+    --status-failed: #ef4444; --status-skipped: #9ca3af;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141416; --card: #1e1e21; --text: #ececef; --muted: #9a9aa2;
+      --border: #2e2e33; --accent: #e07ab8; --accent-soft: #3a2432;
+      --sidebar-bg: #101116; --sidebar-active: #1c1e27;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  .icon { width: 1em; height: 1em; flex: none; }
+
+  .app { display: flex; min-height: 100vh; }
+
+  .sidebar {
+    width: 232px; flex: none; background: var(--sidebar-bg); color: var(--sidebar-text);
+    display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+    box-shadow: 1px 0 0 rgba(0,0,0,0.2);
+  }
+  .brand {
+    padding: 22px 20px 18px; font-size: 1.05rem; font-weight: 700; color: #fff;
+    display: flex; align-items: center; gap: 10px; letter-spacing: -0.01em;
+  }
+  .brand .icon { width: 22px; height: 22px; color: var(--accent); }
+  .nav-item {
+    display: flex; align-items: center; gap: 13px; padding: 10px 20px; background: transparent;
+    color: var(--sidebar-text); border: 0; border-left: 3px solid transparent; text-align: left;
+    font-size: 0.89rem; font-weight: 600; cursor: pointer; font-family: inherit; width: 100%;
+    transition: background 0.12s ease, color 0.12s ease;
+  }
+  .nav-item:hover { background: rgba(255,255,255,0.05); color: #fff; }
+  .nav-item[aria-current="true"] {
+    background: var(--sidebar-active); color: #fff; border-left-color: var(--accent);
+  }
+  .nav-item .icon { width: 17px; height: 17px; flex: none; opacity: 0.85; }
+  .nav-item[aria-current="true"] .icon { opacity: 1; color: var(--accent); }
+  .nav-badge {
+    margin-left: auto; background: var(--accent); color: #fff; font-size: 0.68rem; font-weight: 700;
+    padding: 1px 7px; border-radius: 20px; min-width: 18px; text-align: center;
+  }
+  .sidebar-footer {
+    margin-top: auto; padding: 16px 20px; font-size: 0.74rem; color: #565c74; line-height: 1.5;
+    border-top: 1px solid rgba(255,255,255,0.06);
+  }
+
+  .content { flex: 1; min-width: 0; padding: 32px 40px 64px; max-width: 1100px; }
+  .page { display: none; }
+  .page.active { display: block; }
+  .page-header { margin: 0 0 24px; }
+  .page-header h1 { font-size: 1.5rem; margin: 0 0 4px; letter-spacing: -0.02em; }
+  .page-header p { color: var(--muted); margin: 0; font-size: 0.92rem; }
+
+  .tabs {
+    display: inline-flex; padding: 4px; gap: 4px; margin-bottom: 16px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  }
+  .tabs button {
+    padding: 6px 16px; font-size: 0.9rem; font-weight: 600; border-radius: 7px;
+    background: transparent; color: var(--muted); box-shadow: none; transition: background 0.12s ease, color 0.12s ease;
+  }
+  .tabs button[aria-selected="true"] { background: var(--accent); color: #fff; }
+
+  form { display: flex; gap: 8px; }
+  input[type=search] {
+    flex: 1; min-width: 0; padding: 12px 16px; font-size: 1rem;
+    border: 1px solid var(--border); border-radius: 10px;
+    background: var(--card); color: var(--text); outline: none;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  }
+  input[type=search]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  button {
+    padding: 0 20px; font-size: 1rem; font-weight: 600; border: 0; border-radius: 10px;
+    background: var(--accent); color: #fff; cursor: pointer; font-family: inherit;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.12); transition: filter 0.12s ease, transform 0.05s ease;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.08); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: 0.55; cursor: default; box-shadow: none; }
+  .hint { color: var(--muted); font-size: 0.85rem; margin: 8px 2px 0; }
+  code { background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }
+
+  .bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 24px 2px 12px; flex-wrap: wrap; }
+  #status { color: var(--muted); font-size: 0.9rem; min-height: 1.4em; }
+  #status.error { color: #d0453a; }
+  label { color: var(--muted); font-size: 0.9rem; display: flex; align-items: center; gap: 6px; }
+  select {
+    padding: 6px 10px; font-size: 0.9rem; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--card); color: var(--text);
+  }
+  input[type=number], input[type=text] {
+    padding: 5px 8px; font-size: 0.9rem; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--card); color: var(--text); font-family: inherit;
+  }
+  input[type=number] { width: 4em; }
+
+  ul.result-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  ul.result-list li {
+    display: flex; gap: 14px; align-items: center; padding: 12px; flex-wrap: wrap;
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06); transition: box-shadow 0.12s ease, border-color 0.12s ease;
+  }
+  ul.result-list li:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+  .art {
+    width: 64px; height: 64px; flex: none; border-radius: 8px; background: var(--accent-soft);
+    display: grid; place-items: center; color: var(--accent); font-size: 1.5rem; overflow: hidden;
+  }
+  .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .info { min-width: 0; flex: 1; }
+  .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .title a { text-decoration: none; }
+  .title a:hover { color: var(--accent); text-decoration: underline; }
+  .artist { opacity: 0.85; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta { color: var(--muted); font-size: 0.82rem; display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 2px; }
+  .plays { color: var(--accent); font-weight: 600; }
+  .type {
+    font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+    background: var(--accent-soft); color: var(--accent); padding: 0 6px; border-radius: 4px;
+  }
+  .score { flex: none; font-size: 0.75rem; color: var(--muted); text-align: right; }
+  .side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  .btn-row { display: flex; gap: 6px; }
+  .dl-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 12px; font-size: 0.8rem; border-radius: 7px;
+    background: #e0455a; color: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+  }
+  .dl-btn .icon { width: 13px; height: 13px; }
+  .dl-btn:disabled { opacity: 0.6; cursor: default; }
+
+  /* ---------- Settings page ---------- */
+  .settings-form {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px; display: grid; gap: 16px; max-width: 520px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .settings-form h2 { margin: 0; font-size: 1rem; }
+  .settings-form .field-help { margin: 0 0 6px; color: var(--muted); font-size: 0.85rem; }
+  .settings-form label { display: grid; gap: 4px; color: var(--text); font-size: 0.85rem; font-weight: 600; }
+  .settings-form input[type=text] { width: 100%; padding: 9px 11px; font-size: 0.9rem; }
+  .settings-actions { display: flex; align-items: center; gap: 10px; }
+  #settingsStatus { color: var(--muted); font-size: 0.85rem; }
+  .settings-group { display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .settings-group:first-of-type { border-top: none; padding-top: 0; }
+
+  /* ---------- Stat cards ---------- */
+  .stat-row { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+  .stat-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 20px; min-width: 130px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  .stat-card .stat-value { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.02em; display: flex; align-items: baseline; gap: 6px; }
+  .stat-card .stat-value .icon { width: 15px; height: 15px; color: var(--accent); }
+  .stat-card .stat-label { color: var(--muted); font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+
+  /* ---------- Activity / Library tables ---------- */
+  .data-table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .data-table th, .data-table td {
+    padding: 11px 14px; text-align: left; font-size: 0.88rem; border-bottom: 1px solid var(--border);
+  }
+  .data-table th { color: var(--muted); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  .data-table td.num { text-variant-numeric: tabular-nums; color: var(--muted); }
+  .data-table tr:last-child td { border-bottom: none; }
+  .data-table tr:hover td { background: var(--accent-soft); }
+  .data-table td.col-action { width: 1%; white-space: nowrap; text-align: right; }
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 20px;
+    font-size: 0.76rem; font-weight: 600; color: #fff; white-space: nowrap;
+  }
+  .status-pill.downloading { background: var(--status-downloading); }
+  .status-pill.completed { background: var(--status-completed); }
+  .status-pill.failed { background: var(--status-failed); }
+  .status-pill.skipped { background: var(--status-skipped); }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .status-dot.pulse { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .progress-track {
+    width: 90px; height: 5px; border-radius: 3px; background: rgba(127,127,127,0.25); overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%; width: 40%; background: var(--status-downloading); border-radius: 3px;
+    animation: indeterminate 1.4s ease-in-out infinite;
+  }
+  @keyframes indeterminate {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(250%); }
+  }
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px;
+    padding: 0; border-radius: 7px; background: transparent; color: var(--muted); box-shadow: none;
+    border: 1px solid transparent;
+  }
+  .icon-btn:hover:not(:disabled) { background: rgba(239,68,68,0.12); color: var(--status-failed); filter: none; }
+  .icon-btn .icon { width: 15px; height: 15px; }
+  .empty-state {
+    padding: 40px 20px; text-align: center; color: var(--muted); background: var(--card);
+    border: 1px dashed var(--border); border-radius: 12px; font-size: 0.9rem;
+  }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; gap: 12px; flex-wrap: wrap; }
+  .toolbar-btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 6px 14px; font-size: 0.85rem; font-weight: 600; border-radius: 8px;
+    background: var(--card); color: var(--text); border: 1px solid var(--border); box-shadow: none;
+  }
+  .toolbar-btn .icon { width: 14px; height: 14px; }
+  .toolbar-btn:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); filter: none; }
+  .muted-small { color: var(--muted); font-size: 0.82rem; }
+
+  footer.app-footer { margin-top: 32px; color: var(--muted); font-size: 0.8rem; }
+  footer.app-footer a { color: var(--muted); }
+
+  @media (max-width: 760px) {
+    .app { flex-direction: column; }
+    .sidebar { width: 100%; height: auto; position: static; flex-direction: row; overflow-x: auto; }
+    .brand { display: none; }
+    .nav-item { border-left: none; border-bottom: 3px solid transparent; white-space: nowrap; }
+    .nav-item[aria-current="true"] { border-bottom-color: var(--accent); }
+    .sidebar-footer { display: none; }
+    .content { padding: 24px 16px 48px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="sidebar">
+    <div class="brand">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+      FreeListen
+    </div>
+    <button type="button" class="nav-item" data-page="search" aria-current="true">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      Search
+    </button>
+    <button type="button" class="nav-item" data-page="activity">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+      Activity
+      <span class="nav-badge" id="activeBadge" hidden>0</span>
+    </button>
+    <button type="button" class="nav-item" data-page="library">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+      Library
+    </button>
+    <button type="button" class="nav-item" data-page="settings">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Settings
+    </button>
+    <div class="sidebar-footer">Songs · Albums · Artists · Playlists<br>via MusicBrainz &amp; yt-dlp</div>
+  </nav>
+
+  <main class="content">
+
+    <!-- ---------------- Search page ---------------- -->
+    <section id="page-search" class="page active">
+      <div class="page-header">
+        <h1>Search</h1>
+        <p>Search songs, albums, and artists in the MusicBrainz database, or load a Spotify playlist.</p>
+      </div>
+
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" data-mode="song" aria-selected="true">Songs</button>
+        <button type="button" role="tab" data-mode="album" aria-selected="false">Albums</button>
+        <button type="button" role="tab" data-mode="artist" aria-selected="false">Artists</button>
+        <button type="button" role="tab" data-mode="playlist" aria-selected="false">Playlists</button>
+      </div>
+
+      <form id="form">
+        <input id="q" type="search" placeholder="e.g. Bohemian Rhapsody" autocomplete="off" autofocus>
+        <button id="btn" type="submit">Search</button>
+      </form>
+      <p class="hint" id="hint"></p>
+
+      <div class="bar">
+        <div id="status"></div>
+        <label id="topNLabel" hidden>Download top
+          <input type="number" id="topN" min="1" max="100" value="25">
+          songs
+        </label>
+        <button type="button" id="dlPlaylistAll" hidden></button>
+        <label id="sortLabel">Sort by
+          <select id="sort">
+            <option value="popularity">Popularity</option>
+            <option value="relevance">Best match</option>
+          </select>
+        </label>
+      </div>
+      <ul id="results" class="result-list"></ul>
+
+      <footer class="app-footer">Data from <a href="https://musicbrainz.org" target="_blank" rel="noopener">MusicBrainz</a> · Play counts from <a href="https://listenbrainz.org" target="_blank" rel="noopener">ListenBrainz</a> · Cover art from <a href="https://coverartarchive.org" target="_blank" rel="noopener">Cover Art Archive</a></footer>
+    </section>
+
+    <!-- ---------------- Activity page ---------------- -->
+    <section id="page-activity" class="page">
+      <div class="page-header">
+        <h1>Activity</h1>
+        <p>Live queue and recent download history.</p>
+      </div>
+      <div class="toolbar">
+        <span class="muted-small" id="activitySummary"></span>
+        <button type="button" class="toolbar-btn" id="clearActivityBtn">Clear history</button>
+      </div>
+      <div id="activityContainer"></div>
+    </section>
+
+    <!-- ---------------- Library page ---------------- -->
+    <section id="page-library" class="page">
+      <div class="page-header">
+        <h1>Library</h1>
+        <p>Everything currently saved to disk.</p>
+      </div>
+      <div class="toolbar">
+        <span class="muted-small" id="librarySummary"></span>
+        <button type="button" class="toolbar-btn" id="refreshLibraryBtn">Refresh</button>
+      </div>
+      <div id="libraryContainer"></div>
+    </section>
+
+    <!-- ---------------- Settings page ---------------- -->
+    <section id="page-settings" class="page">
+      <div class="page-header">
+        <h1>Settings</h1>
+        <p>Saved on the backend (settings.json) - none of this is required for basic search/download.</p>
+      </div>
+      <div class="settings-form">
+        <div class="settings-group">
+          <h2>ListenBrainz</h2>
+          <p class="field-help">Makes the artist "Download top N tracks" button reliable - ListenBrainz gates that endpoint against scrapers and can intermittently reject unauthenticated requests.</p>
+          <label>User Token
+            <input type="text" id="setListenbrainz" placeholder="from listenbrainz.org/settings/" autocomplete="off">
+          </label>
+        </div>
+        <div class="settings-group">
+          <h2>Spotify</h2>
+          <p class="field-help">Lifts the ~50-track cap on Playlists (switches to the official Web API with full pagination). Get these free at developer.spotify.com/dashboard.</p>
+          <label>Client ID
+            <input type="text" id="setSpotifyId" placeholder="optional" autocomplete="off">
+          </label>
+          <label>Client Secret
+            <input type="text" id="setSpotifySecret" placeholder="optional" autocomplete="off">
+          </label>
+        </div>
+        <div class="settings-actions">
+          <button type="button" id="settingsSave">Save</button>
+          <span id="settingsStatus"></span>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  const DOWNLOAD_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+  const TRASH_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
+  const REFRESH_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>';
+
+  // API keys (ListenBrainz token, Spotify credentials) live on the Settings
+  // page now, not hardcoded here - saved server-side via POST /api/settings
+  // (backend/settings.json) and loaded below at startup.
+  let LISTENBRAINZ_TOKEN = "";
+  const BACKEND = ""; // relative - this page is served by the same backend
+
+  // ---------------- Sidebar / page navigation ----------------
+  const navItems = document.querySelectorAll(".nav-item");
+  const pages = document.querySelectorAll(".page");
+
+  function showPage(name) {
+    navItems.forEach(el => el.setAttribute("aria-current", String(el.dataset.page === name)));
+    pages.forEach(el => el.classList.toggle("active", el.id === `page-${name}`));
+    if (name === "activity") refreshActivity();
+    if (name === "library") refreshLibrary();
+  }
+  navItems.forEach(el => el.addEventListener("click", () => showPage(el.dataset.page)));
+
+  // Everything that differs between song search and album search lives here.
+  const MODES = {
+    song: {
+      searchUrl: "https://musicbrainz.org/ws/2/recording",
+      titleField: "recording",           // Lucene field for the name
+      resultsKey: "recordings",          // key in the MusicBrainz JSON response
+      popularityUrl: "https://api.listenbrainz.org/1/popularity/recording",
+      popularityKey: "recording_mbids",
+      popularityIdKey: "recording_mbid",
+      pageUrl: id => `https://musicbrainz.org/recording/${id}`,
+      placeholder: "e.g. Bohemian Rhapsody",
+      hint: "Tip: narrow it down with <code>artist:queen</code>, e.g. <code>bohemian rhapsody artist:queen</code>",
+      noun: "songs"
+    },
+    album: {
+      searchUrl: "https://musicbrainz.org/ws/2/release-group",
+      titleField: "releasegroup",
+      resultsKey: "release-groups",
+      popularityUrl: "https://api.listenbrainz.org/1/popularity/release-group",
+      popularityKey: "release_group_mbids",
+      popularityIdKey: "release_group_mbid",
+      pageUrl: id => `https://musicbrainz.org/release-group/${id}`,
+      placeholder: "e.g. A Night at the Opera",
+      hint: "Tip: narrow it down with <code>artist:queen</code>, e.g. <code>a night at the opera artist:queen</code>",
+      noun: "albums"
+    },
+    artist: {
+      searchUrl: "https://musicbrainz.org/ws/2/artist",
+      resultsKey: "artists",
+      popularityUrl: "https://api.listenbrainz.org/1/popularity/artist",
+      popularityKey: "artist_mbids",
+      popularityIdKey: "artist_mbid",
+      pageUrl: id => `https://musicbrainz.org/artist/${id}`,
+      placeholder: "e.g. Queen",
+      hint: "Just type the artist's name, e.g. <code>queen</code>",
+      noun: "artists",
+      // There's only one field to search here, so this skips the shared
+      // title/artist query builder and just searches by name directly.
+      buildQuery: raw => {
+        const name = raw.trim();
+        if (!name) return "";
+        return `artist:"${name.replace(/(["\\])/g, "\\$1")}"`;
+      }
+    },
+    // Not a MusicBrainz search at all - the form submit handler branches to
+    // searchPlaylist() for this mode instead of the generic search(). These
+    // fields exist just to drive the shared placeholder/hint/status UI.
+    playlist: {
+      placeholder: "Paste a Spotify playlist link",
+      hint: "Paste a public Spotify playlist link, e.g. <code>https://open.spotify.com/playlist/...</code>",
+      noun: "tracks"
+    }
+  };
+
+  const form = document.getElementById("form");
+  const input = document.getElementById("q");
+  const btn = document.getElementById("btn");
+  const hintEl = document.getElementById("hint");
+  const sortEl = document.getElementById("sort");
+  const statusEl = document.getElementById("status");
+  const list = document.getElementById("results");
+  const tabs = document.querySelectorAll(".tabs button");
+  const topNInput = document.getElementById("topN");
+  const topNLabel = document.getElementById("topNLabel");
+  const sortLabel = document.getElementById("sortLabel");
+  const dlPlaylistAllBtn = document.getElementById("dlPlaylistAll");
+  const setListenbrainz = document.getElementById("setListenbrainz");
+  const setSpotifyId = document.getElementById("setSpotifyId");
+  const setSpotifySecret = document.getElementById("setSpotifySecret");
+  const settingsSave = document.getElementById("settingsSave");
+  const settingsStatus = document.getElementById("settingsStatus");
+
+  async function loadSettings() {
+    try {
+      const res = await fetch(`${BACKEND}/api/settings`);
+      if (!res.ok) return;
+      const data = await res.json();
+      LISTENBRAINZ_TOKEN = data.listenbrainzToken || "";
+      setListenbrainz.value = data.listenbrainzToken || "";
+      setSpotifyId.value = data.spotifyClientId || "";
+      setSpotifySecret.value = data.spotifyClientSecret || "";
+    } catch (err) {
+      console.warn("Could not load settings from backend:", err);
+    }
+  }
+
+  settingsSave.addEventListener("click", async () => {
+    settingsSave.disabled = true;
+    settingsStatus.textContent = "Saving…";
+    try {
+      const body = {
+        listenbrainzToken: setListenbrainz.value.trim(),
+        spotifyClientId: setSpotifyId.value.trim(),
+        spotifyClientSecret: setSpotifySecret.value.trim(),
+      };
+      const res = await fetch(`${BACKEND}/api/settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`Save failed (${res.status})`);
+      LISTENBRAINZ_TOKEN = body.listenbrainzToken;
+      settingsStatus.textContent = "Saved ✓";
+      setTimeout(() => { settingsStatus.textContent = ""; }, 2000);
+    } catch (err) {
+      console.error(err);
+      settingsStatus.textContent = "Could not save (is the backend running?)";
+    } finally {
+      settingsSave.disabled = false;
+    }
+  });
+
+  loadSettings();
+
+  // How many of an artist's most-popular tracks the "Download top N" button
+  // fetches, read live from the number input (clamped to a sane range).
+  function clampTopN() {
+    const n = parseInt(topNInput.value, 10);
+    if (!Number.isFinite(n) || n < 1) return 1;
+    return Math.min(n, 100);
+  }
+
+  // Keeps any already-rendered "Download top N" buttons in sync when the
+  // count is changed without re-searching. Buttons mid-download are left
+  // alone so their progress text isn't clobbered.
+  function refreshArtistButtonLabels() {
+    document.querySelectorAll("[data-dl-artist]").forEach(btn => {
+      if (!btn.disabled) btn.innerHTML = `${DOWNLOAD_ICON} Download top ${clampTopN()} tracks`;
+    });
+  }
+  topNInput.addEventListener("input", refreshArtistButtonLabels);
+
+  let mode = "song";
+  let current = { items: [], count: 0, mode: "song", popularityFailed: false };
+  let lastRequest = 0;
+
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  function fmtLength(ms) {
+    if (!ms) return "";
+    const total = Math.round(ms / 1000);
+    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+  }
+
+  function artistName(credit) {
+    return (credit || []).map(c => c.name + (c.joinphrase || "")).join("") || "Unknown artist";
+  }
+
+  // Turns "bohemian rhapsody artist:queen" into a proper Lucene query.
+  // "artist:" always comes last (per the hint text), so an unquoted artist
+  // name greedily captures to the end of the string - not just the first
+  // word - letting "artist:michael jackson" work without needing quotes.
+  function buildQuery(raw, titleField) {
+    const artistMatch = raw.match(/artist:("([^"]+)"|(.+))$/i);
+    const artist = artistMatch ? (artistMatch[2] || artistMatch[3]).trim() : null;
+    const title = raw.replace(/artist:("[^"]+"|.+)$/i, "").trim();
+    const clean = s => s.replace(/(["\\])/g, "\\$1");
+    const parts = [];
+    if (title) parts.push(`${titleField}:"${clean(title)}"`);
+    if (artist) parts.push(`artist:"${clean(artist)}"`);
+    return parts.join(" AND ");
+  }
+
+  // All MusicBrainz requests go through here: MusicBrainz allows ~1 request per second.
+  let mbQueue = Promise.resolve();
+  function mbFetch(url) {
+    const run = mbQueue.then(async () => {
+      const wait = 1000 - (Date.now() - lastRequest);
+      if (wait > 0) await new Promise(r => setTimeout(r, wait));
+      lastRequest = Date.now();
+      return fetch(url, { headers: { Accept: "application/json" } });
+    });
+    mbQueue = run.catch(() => {});
+    return run;
+  }
+
+  function setStatus(msg, isError = false) {
+    statusEl.textContent = msg;
+    statusEl.className = isError ? "error" : "";
+  }
+
+  function setMode(newMode) {
+    mode = newMode;
+    const cfg = MODES[mode];
+    tabs.forEach(t => t.setAttribute("aria-selected", String(t.dataset.mode === mode)));
+    input.placeholder = cfg.placeholder;
+    hintEl.innerHTML = cfg.hint;
+    topNLabel.hidden = mode !== "artist";
+    sortLabel.hidden = mode === "playlist";
+    dlPlaylistAllBtn.hidden = true;
+    // Re-run the current search in the new mode, if there is one.
+    if (input.value.trim()) runSearch(input.value.trim());
+    else { list.innerHTML = ""; setStatus(""); }
+    input.focus();
+  }
+
+  function runSearch(raw) {
+    return mode === "playlist" ? searchPlaylist(raw) : search(raw);
+  }
+
+  async function search(raw) {
+    const searchMode = mode;
+    const cfg = MODES[searchMode];
+    const query = cfg.buildQuery ? cfg.buildQuery(raw) : buildQuery(raw, cfg.titleField);
+    if (!query) return;
+
+    btn.disabled = true;
+    setStatus("Searching…");
+    list.innerHTML = "";
+
+    try {
+      const url = `${cfg.searchUrl}?query=${encodeURIComponent(query)}&fmt=json&limit=50`;
+      const res = await mbFetch(url);
+      if (res.status === 503) throw new Error("MusicBrainz is rate-limiting requests. Wait a moment and try again.");
+      if (!res.ok) throw new Error(`MusicBrainz returned an error (${res.status}).`);
+      const data = await res.json();
+      const items = data[cfg.resultsKey] || [];
+
+      setStatus("Getting play counts…");
+      const popularityOk = await addPopularity(items, cfg);
+
+      if (searchMode !== mode) return; // user switched tabs mid-search
+      current = { items, count: data.count || 0, mode: searchMode, popularityFailed: !popularityOk };
+      render();
+    } catch (err) {
+      setStatus(err.message || "Something went wrong.", true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // Adds ListenBrainz play counts (item.listens, item.listeners) to each result.
+  // If ListenBrainz is unreachable, results still show, just without play counts.
+  async function addPopularity(items, cfg) {
+    if (!items.length) return true;
+    try {
+      const res = await fetch(cfg.popularityUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [cfg.popularityKey]: items.map(i => i.id) })
+      });
+      if (!res.ok) throw new Error(res.status);
+      const stats = await res.json();
+      const byId = new Map(stats.map(s => [s[cfg.popularityIdKey], s]));
+      for (const item of items) {
+        const s = byId.get(item.id);
+        item.listens = s?.total_listen_count ?? 0;
+        item.listeners = s?.total_user_count ?? 0;
+      }
+      return true;
+    } catch (err) {
+      console.warn("Popularity lookup failed:", err);
+      return false;
+    }
+  }
+
+  function sorted(items) {
+    const copy = [...items];
+    if (sortEl.value === "popularity") {
+      copy.sort((a, b) => (b.listens || 0) - (a.listens || 0) || (b.score || 0) - (a.score || 0));
+    }
+    return copy; // "relevance" keeps MusicBrainz's original order
+  }
+
+  function playsBadge(item) {
+    return item.listens ? `<span class="plays">▶ ${item.listens.toLocaleString()} plays</span>` : "";
+  }
+
+  function songRow(r) {
+    const release = (r.releases || [])[0];
+    const date = r["first-release-date"] || release?.date || "";
+    const art = release
+      ? `<img src="https://coverartarchive.org/release/${release.id}/front-250" alt="" loading="lazy"
+           onerror="this.parentNode.textContent='♪'">`
+      : "♪";
+    const meta = [playsBadge(r), release ? esc(release.title) : "", date.slice(0, 4), fmtLength(r.length)];
+    const extra = `
+      <div class="btn-row">
+        <button type="button" class="dl-btn" data-dl="${r.id}">${DOWNLOAD_ICON} Download</button>
+      </div>`;
+    return row(r, MODES.song.pageUrl(r.id), art, meta, extra);
+  }
+
+  function albumRow(g) {
+    const art = `<img src="https://coverartarchive.org/release-group/${g.id}/front-250" alt="" loading="lazy"
+                   onerror="this.parentNode.textContent='◉'">`;
+    const type = g["primary-type"]
+      ? `<span class="type">${esc([g["primary-type"], ...(g["secondary-types"] || [])].join(" · "))}</span>`
+      : "";
+    const date = g["first-release-date"] || "";
+    const editions = g.count > 1 ? `${g.count} editions` : "";
+    const meta = [type, playsBadge(g), date.slice(0, 4), editions];
+    return row(g, MODES.album.pageUrl(g.id), art, meta);
+  }
+
+  function artistRow(a) {
+    const type = a.type ? `<span class="type">${esc(a.type)}</span>` : "";
+    const country = a.country || a.area?.name || "";
+    const life = a["life-span"] ? [a["life-span"].begin, a["life-span"].end].filter(Boolean).join(" – ") : "";
+    const meta = [type, playsBadge(a), country, life];
+    const extra = `
+      <div class="btn-row">
+        <button type="button" class="dl-btn" data-dl-artist="${a.id}">${DOWNLOAD_ICON} Download top ${clampTopN()} tracks</button>
+      </div>`;
+    return `
+      <li>
+        <div class="art">🎤</div>
+        <div class="info">
+          <div class="title"><a href="${MODES.artist.pageUrl(a.id)}" target="_blank" rel="noopener">${esc(a.name)}</a></div>
+          <div class="artist">${esc(a.disambiguation || "")}</div>
+          <div class="meta">${meta.filter(Boolean).map(m => `<span>${m}</span>`).join("")}</div>
+        </div>
+        <div class="side">
+          <div class="score">${a.score ?? ""}% match</div>
+          ${extra}
+        </div>
+      </li>`;
+  }
+
+  function row(item, link, art, metaParts, extra = "") {
+    const meta = metaParts.filter(Boolean).map(m => `<span>${m}</span>`).join("");
+    return `
+      <li>
+        <div class="art">${art}</div>
+        <div class="info">
+          <div class="title"><a href="${link}" target="_blank" rel="noopener">${esc(item.title)}</a></div>
+          <div class="artist">${esc(artistName(item["artist-credit"]))}</div>
+          <div class="meta">${meta}</div>
+        </div>
+        <div class="side">
+          <div class="score">${item.score ?? ""}% match</div>
+          ${extra}
+        </div>
+      </li>`;
+  }
+
+  // Downloading audio from a YouTube video can't be done from the browser
+  // alone (YouTube doesn't serve raw audio files, and CORS blocks a direct
+  // fetch). The backend (POST /api/download) takes a search query - not a
+  // specific video - and resolves + downloads + converts it via yt-dlp's own
+  // built-in search, tags the result with title/artist/album/year/genre, and
+  // saves it as "<title> - <artist>.mp3" in its own save folder on the
+  // machine it runs on. Nothing comes back to the browser to save.
+  function lyricsQueryFor(title, artist) {
+    return `${artist} ${title} lyrics`;
+  }
+
+  async function postDownload(body) {
+    const resp = await fetch(`${BACKEND}/api/download`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || `Download failed (${resp.status})`);
+    return data;
+  }
+
+  // Shared single-track download: posts the download, retries once after a
+  // pause on failure (YouTube downloads occasionally fail transiently - a bad
+  // format pick, a momentary throttle), and reflects progress on the button.
+  async function runDownload(button, body) {
+    const original = button.innerHTML; // innerHTML (not textContent) so the icon survives the restore
+    button.disabled = true;
+    button.textContent = "Saving…";
+    refreshActivitySoon();
+    try {
+      let data;
+      try {
+        data = await postDownload(body);
+      } catch (err) {
+        console.warn("Retrying after error:", err);
+        await new Promise(r => setTimeout(r, 3000));
+        data = await postDownload(body);
+      }
+      button.textContent = data.skipped ? "Already saved ✓" : "Saved ✓";
+      setTimeout(() => { button.innerHTML = original; }, 2000);
+    } catch (err) {
+      console.error(err);
+      alert("Could not download the track.");
+      button.innerHTML = original;
+    } finally {
+      button.disabled = false;
+      refreshActivitySoon();
+    }
+  }
+
+  async function downloadTrack(button) {
+    const id = button.dataset.dl;
+    const rec = current.items.find(i => i.id === id);
+    const artist = artistName(rec["artist-credit"]);
+    const release = (rec.releases || [])[0];
+    const album = release?.title || null;
+    const year = (rec["first-release-date"] || release?.date || "").slice(0, 4) || null;
+    await runDownload(button, { query: lyricsQueryFor(rec.title, artist), title: rec.title, artist, album, year });
+  }
+
+  // ---------- Artist "download top N" ----------
+  // ListenBrainz has a dedicated endpoint that returns an artist's recordings
+  // pre-sorted by actual play count, so there's no need to sample MusicBrainz's
+  // catalog browse (which comes back roughly alphabetical, not by popularity).
+  function normalizeTitle(title) {
+    return String(title).toLowerCase().replace(/\s*[\(\[][^\)\]]*[\)\]]\s*$/, "").trim();
+  }
+
+  // A trailing qualifier like "(Live at Wembley)" or "- Remastered 2011" marks
+  // a non-studio version. Only trailing bracket/dash segments are checked, so
+  // a title that starts with a word like "Live" (e.g. "Live and Let Die")
+  // isn't excluded by mistake.
+  function isRemasterOrLiveVersion(title) {
+    const segments = [];
+    const bracketRe = /[\(\[]([^\)\]]*)[\)\]]/g;
+    let m;
+    while ((m = bracketRe.exec(title))) segments.push(m[1]);
+    const dashMatch = title.match(/-\s*([^-]+)$/);
+    if (dashMatch) segments.push(dashMatch[1]);
+    return segments.some(seg => /\b(remaster(ed)?|live|concert)\b/i.test(seg));
+  }
+
+  function topGenre(tags) {
+    if (!tags?.length) return null;
+    const withGenre = tags.filter(t => t.genre_mbid);
+    const pool = withGenre.length ? withGenre : tags;
+    return pool.slice().sort((a, b) => (b.count || 0) - (a.count || 0))[0]?.tag || null;
+  }
+
+  async function fetchTopRecordings(artistId) {
+    const url = `https://api.listenbrainz.org/1/popularity/top-recordings-for-artist/${artistId}`;
+    const opts = LISTENBRAINZ_TOKEN ? { headers: { Authorization: `Token ${LISTENBRAINZ_TOKEN}` } } : {};
+    const res = await fetch(url, opts);
+    if (res.ok) return res.json();
+    // ListenBrainz has started rate-limiting/gating this endpoint against
+    // scrapers, which can intermittently 401/429 a legitimate request even
+    // with a token. One retry after a short pause clears most of these.
+    if (res.status === 401 || res.status === 429) {
+      await new Promise(r => setTimeout(r, 2000));
+      const retryRes = await fetch(url, opts);
+      if (retryRes.ok) return retryRes.json();
+      const hint = LISTENBRAINZ_TOKEN
+        ? "it may still be rate-limiting this endpoint, try again shortly"
+        : "add a free token on the Settings page";
+      throw new Error(`ListenBrainz error (${retryRes.status}) - ${hint}`);
+    }
+    throw new Error(`ListenBrainz error (${res.status})`);
+  }
+
+  async function topTracksForArtist(artistId, n) {
+    const items = await fetchTopRecordings(artistId);
+
+    const seen = new Set();
+    const top = [];
+    for (const item of items) {
+      if (!item.recording_mbid || !item.recording_name) continue;
+      // Drop very short recordings - usually interview clips, intros, or skits
+      // rather than actual songs.
+      if (item.length && item.length < 30000) continue;
+      if (isRemasterOrLiveVersion(item.recording_name)) continue;
+      const key = normalizeTitle(item.recording_name);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      top.push({
+        id: item.recording_mbid,
+        title: item.recording_name,
+        length: item.length,
+        album: item.release_name || null,
+        genre: topGenre(item.tags),
+        "artist-credit": (item.artists || []).map(a => ({ name: a.artist_credit_name, joinphrase: a.join_phrase || "" }))
+      });
+      if (top.length >= n) break;
+    }
+
+    // ListenBrainz doesn't return a release year, so look it up per selected
+    // track (only for the final N, to keep this from ballooning into
+    // hundreds of MusicBrainz requests).
+    for (const rec of top) {
+      try {
+        const res = await mbFetch(`https://musicbrainz.org/ws/2/recording/${rec.id}?inc=releases&fmt=json`);
+        if (res.ok) {
+          const data = await res.json();
+          const release = (data.releases || [])[0];
+          rec.year = (data["first-release-date"] || release?.date || "").slice(0, 4) || null;
+          if (!rec.album && release?.title) rec.album = release.title;
+        }
+      } catch (e) { console.warn(e); }
+    }
+
+    return top;
+  }
+
+  async function downloadOneTrack(rec, artist) {
+    const data = await postDownload({
+      query: lyricsQueryFor(rec.title, artist), title: rec.title, artist,
+      album: rec.album, year: rec.year, genre: rec.genre
+    });
+    return { skipped: !!data.skipped };
+  }
+
+  // Shared bulk-download loop, used by both the artist "download top N" and
+  // playlist "download all" buttons: downloads each track via downloadOneTrack
+  // (with a retry-after-pause on failure), paced so requests to YouTube
+  // aren't fired in an uninterrupted burst, and reflects progress on the button.
+  async function downloadTracksBulk(button, tracks, artistFor) {
+    const original = button.innerHTML; // innerHTML so the icon survives the restore
+    button.disabled = true;
+
+    let saved = 0;
+    let alreadyHad = 0;
+    for (let i = 0; i < tracks.length; i++) {
+      const rec = tracks[i];
+      const artist = artistFor(rec);
+      button.textContent = `Saving ${i + 1}/${tracks.length}…`;
+      refreshActivitySoon();
+      try {
+        let result;
+        try {
+          result = await downloadOneTrack(rec, artist);
+        } catch (err) {
+          console.warn(`Retrying "${rec.title}" after error:`, err);
+          await new Promise(r => setTimeout(r, 3000));
+          result = await downloadOneTrack(rec, artist);
+        }
+        if (result.skipped) alreadyHad++; else saved++;
+      } catch (err) {
+        console.warn(`Skipping "${rec.title}":`, err);
+      }
+      if (i < tracks.length - 1) await new Promise(r => setTimeout(r, 1200));
+    }
+
+    button.textContent = alreadyHad
+      ? `${saved} new, ${alreadyHad} already saved ✓`
+      : `Saved ${saved}/${tracks.length} ✓`;
+    setTimeout(() => { button.innerHTML = original; }, 4000);
+    button.disabled = false;
+    refreshActivitySoon();
+  }
+
+  async function downloadArtistTopTracks(button) {
+    const id = button.dataset.dlArtist;
+    const artist = current.items.find(a => a.id === id);
+    const original = button.innerHTML; // innerHTML so the icon survives the restore
+    button.disabled = true;
+    button.textContent = "Finding tracks…";
+
+    let tracks;
+    try {
+      const n = clampTopN();
+      tracks = await topTracksForArtist(id, n);
+    } catch (err) {
+      console.error(err);
+      alert(`Could not download tracks for this artist: ${err.message || err}`);
+      button.disabled = false;
+      button.innerHTML = original;
+      return;
+    }
+
+    if (!tracks.length) {
+      alert("No tracks found for this artist.");
+      button.disabled = false;
+      button.innerHTML = original;
+      return;
+    }
+
+    await downloadTracksBulk(button, tracks, () => artist.name);
+  }
+
+  list.addEventListener("click", e => {
+    const dlArtistButton = e.target.closest("[data-dl-artist]");
+    if (dlArtistButton) { downloadArtistTopTracks(dlArtistButton); return; }
+
+    const dlPlaylistButton = e.target.closest("[data-dl-playlist]");
+    if (dlPlaylistButton) { downloadPlaylistTrack(dlPlaylistButton); return; }
+
+    const dlButton = e.target.closest(".dl-btn[data-dl]");
+    if (dlButton) downloadTrack(dlButton);
+  });
+
+  dlPlaylistAllBtn.addEventListener("click", () => downloadPlaylistAll(dlPlaylistAllBtn));
+
+  function render() {
+    const { items, count, popularityFailed } = current;
+    const cfg = MODES[current.mode];
+    if (!items.length) {
+      setStatus(`No ${cfg.noun} found. Try a different spelling or fewer words.`);
+      list.innerHTML = "";
+      return;
+    }
+    const note = popularityFailed ? " (play counts unavailable right now)" : "";
+    setStatus(`Showing ${items.length} of ${count.toLocaleString()} ${cfg.noun}${note}`);
+    const toRow = current.mode === "album" ? albumRow : current.mode === "artist" ? artistRow : songRow;
+    list.innerHTML = sorted(items).map(toRow).join("");
+  }
+
+  // ---------------- Playlists ----------------
+  // Not a MusicBrainz search: fetches a Spotify playlist's tracks via this
+  // same backend's /api/playlist, which itself proxies to the SpotipyFree
+  // playlist-backend service when configured (see docker-compose.yml),
+  // falling back to its own embed-page/official-API logic otherwise.
+  async function searchPlaylist(url) {
+    if (!url.trim()) return;
+    btn.disabled = true;
+    setStatus("Loading playlist…");
+    list.innerHTML = "";
+    dlPlaylistAllBtn.hidden = true;
+
+    try {
+      const res = await fetch(`/api/playlist?url=${encodeURIComponent(url.trim())}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Playlist fetch failed (${res.status})`);
+      if (mode !== "playlist") return; // switched tabs while loading
+
+      const tracks = data.tracks || [];
+      current = { items: tracks, count: tracks.length, mode: "playlist", popularityFailed: false };
+      if (!tracks.length) {
+        setStatus("No tracks found in that playlist.");
+        return;
+      }
+      const note = data.truncated
+        ? ` (showing the first ${tracks.length} - add Spotify credentials in Settings for the full playlist)`
+        : "";
+      setStatus(`"${data.name || "Playlist"}" - ${tracks.length} tracks${note}`);
+      list.innerHTML = tracks.map(playlistTrackRow).join("");
+      dlPlaylistAllBtn.hidden = false;
+      dlPlaylistAllBtn.innerHTML = `${DOWNLOAD_ICON} Download all ${tracks.length} tracks`;
+    } catch (err) {
+      setStatus(err.message || "Something went wrong.", true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function playlistTrackRow(rec, idx) {
+    const meta = [rec.album, rec.year].filter(Boolean).map(esc);
+    return `
+      <li>
+        <div class="art">♪</div>
+        <div class="info">
+          <div class="title">${esc(rec.title)}</div>
+          <div class="artist">${esc(rec.artist)}</div>
+          <div class="meta">${meta.map(m => `<span>${m}</span>`).join("")}</div>
+        </div>
+        <div class="side">
+          <div class="btn-row">
+            <button type="button" class="dl-btn" data-dl-playlist="${idx}">${DOWNLOAD_ICON} Download</button>
+          </div>
+        </div>
+      </li>`;
+  }
+
+  async function downloadPlaylistTrack(button) {
+    const rec = current.items[Number(button.dataset.dlPlaylist)];
+    if (!rec) return;
+    await runDownload(button, {
+      query: lyricsQueryFor(rec.title, rec.artist), title: rec.title, artist: rec.artist, album: rec.album, year: rec.year
+    });
+  }
+
+  async function downloadPlaylistAll(button) {
+    if (!current.items.length) return;
+    await downloadTracksBulk(button, current.items, rec => rec.artist);
+  }
+
+  tabs.forEach(t => t.addEventListener("click", () => { if (t.dataset.mode !== mode) setMode(t.dataset.mode); }));
+  sortEl.addEventListener("change", () => { if (current.items.length) render(); });
+  form.addEventListener("submit", e => {
+    e.preventDefault();
+    runSearch(input.value.trim());
+  });
+
+  hintEl.innerHTML = MODES.song.hint;
+
+  // ---------------- Activity page ----------------
+  const activityContainer = document.getElementById("activityContainer");
+  const activitySummary = document.getElementById("activitySummary");
+  const clearActivityBtn = document.getElementById("clearActivityBtn");
+  const activeBadge = document.getElementById("activeBadge");
+  clearActivityBtn.innerHTML = `${TRASH_ICON} Clear history`;
+
+  function fmtTime(ms) {
+    if (!ms) return "";
+    const d = new Date(ms);
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function fmtElapsed(startedAt, finishedAt) {
+    const end = finishedAt || Date.now();
+    const secs = Math.max(0, Math.round((end - startedAt) / 1000));
+    if (secs < 60) return `${secs}s`;
+    return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  }
+
+  function statusPill(status) {
+    const labels = { downloading: "Downloading", completed: "Completed", failed: "Failed", skipped: "Skipped" };
+    const dotClass = status === "downloading" ? "status-dot pulse" : "status-dot";
+    return `<span class="status-pill ${status}"><span class="${dotClass}"></span>${labels[status] || status}</span>`;
+  }
+
+  function statCard(iconSvg, value, label) {
+    return `<div class="stat-card"><div class="stat-value">${iconSvg}${value}</div><div class="stat-label">${label}</div></div>`;
+  }
+
+  async function refreshActivity() {
+    try {
+      const res = await fetch(`${BACKEND}/api/activity`);
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+      renderActivity(data.items || []);
+    } catch (err) {
+      activityContainer.innerHTML = `<div class="empty-state">Could not reach the backend to load activity.</div>`;
+    }
+  }
+
+  // Called right after a download starts/finishes so the Activity page (if
+  // open) updates without waiting for the next poll tick.
+  function refreshActivitySoon() {
+    updateActiveBadge();
+    if (document.getElementById("page-activity").classList.contains("active")) refreshActivity();
+  }
+
+  async function updateActiveBadge() {
+    try {
+      const res = await fetch(`${BACKEND}/api/activity`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const activeCount = (data.items || []).filter(a => a.status === "downloading").length;
+      activeBadge.hidden = activeCount === 0;
+      activeBadge.textContent = activeCount;
+    } catch {}
+  }
+
+  const INBOX_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>';
+  const CHECK_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+  const X_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+
+  function renderActivity(items) {
+    if (!items.length) {
+      activitySummary.textContent = "";
+      activityContainer.innerHTML = `<div class="empty-state">Nothing here yet - downloads you start will show up in this list.</div>`;
+      return;
+    }
+    const active = items.filter(a => a.status === "downloading");
+    const completed = items.filter(a => a.status === "completed" || a.status === "skipped").length;
+    const failed = items.filter(a => a.status === "failed").length;
+    activitySummary.textContent = "";
+
+    const stats = `
+      <div class="stat-row">
+        ${statCard(INBOX_ICON, active.length, "Downloading")}
+        ${statCard(CHECK_ICON, completed, "Completed")}
+        ${statCard(X_ICON, failed, "Failed")}
+      </div>`;
+
+    const rows = items.map(a => `
+      <tr>
+        <td>${esc(a.title)}</td>
+        <td>${esc(a.artist || "")}</td>
+        <td>${esc(a.album || "")}</td>
+        <td>${a.status === "downloading"
+          ? `<div class="progress-track"><div class="progress-fill"></div></div>`
+          : statusPill(a.status)}</td>
+        <td class="num">${fmtElapsed(a.startedAt, a.finishedAt)}</td>
+        <td class="num">${fmtTime(a.startedAt)}</td>
+      </tr>`).join("");
+
+    activityContainer.innerHTML = `
+      ${stats}
+      <table class="data-table">
+        <thead><tr><th>Title</th><th>Artist</th><th>Album</th><th>Status</th><th>Time</th><th>Started</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  clearActivityBtn.addEventListener("click", async () => {
+    clearActivityBtn.disabled = true;
+    try {
+      await fetch(`${BACKEND}/api/activity`, { method: "DELETE" });
+      await refreshActivity();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      clearActivityBtn.disabled = false;
+    }
+  });
+
+  // Poll while the Activity tab is open, and always keep the sidebar badge
+  // current in the background (lightweight - same endpoint, just counts).
+  setInterval(() => {
+    if (document.getElementById("page-activity").classList.contains("active")) refreshActivity();
+  }, 3000);
+  setInterval(updateActiveBadge, 5000);
+  updateActiveBadge();
+
+  // ---------------- Library page ----------------
+  const libraryContainer = document.getElementById("libraryContainer");
+  const librarySummary = document.getElementById("librarySummary");
+  const refreshLibraryBtn = document.getElementById("refreshLibraryBtn");
+  refreshLibraryBtn.innerHTML = `${REFRESH_ICON} Refresh`;
+
+  function fmtSize(bytes) {
+    if (!bytes) return "";
+    const mb = bytes / (1024 * 1024);
+    return `${mb.toFixed(1)} MB`;
+  }
+
+  async function refreshLibrary() {
+    librarySummary.textContent = "Loading…";
+    try {
+      const res = await fetch(`${BACKEND}/api/library`);
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+      renderLibrary(data.items || []);
+    } catch (err) {
+      librarySummary.textContent = "";
+      libraryContainer.innerHTML = `<div class="empty-state">Could not reach the backend to load the library.</div>`;
+    }
+  }
+
+  const LIBRARY_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>';
+  const DISK_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>';
+
+  function renderLibrary(items) {
+    if (!items.length) {
+      librarySummary.textContent = "";
+      libraryContainer.innerHTML = `<div class="empty-state">No downloads yet - saved tracks will show up here.</div>`;
+      return;
+    }
+    const totalBytes = items.reduce((sum, i) => sum + (i.size || 0), 0);
+    librarySummary.textContent = "";
+
+    const stats = `
+      <div class="stat-row">
+        ${statCard(LIBRARY_ICON, items.length, "Tracks")}
+        ${statCard(DISK_ICON, (totalBytes / (1024 * 1024 * 1024)).toFixed(2) + " GB", "On disk")}
+      </div>`;
+
+    const rows = items.map(t => `
+      <tr>
+        <td>${esc(t.title)}</td>
+        <td>${esc(t.artist || "")}</td>
+        <td>${esc(t.album || "")}</td>
+        <td class="num">${esc(t.year || "")}</td>
+        <td class="num">${fmtSize(t.size)}</td>
+        <td class="col-action">
+          <button type="button" class="icon-btn" data-delete-file="${esc(t.filename)}" data-delete-title="${esc(t.title)}" title="Delete">${TRASH_ICON}</button>
+        </td>
+      </tr>`).join("");
+
+    libraryContainer.innerHTML = `
+      ${stats}
+      <table class="data-table">
+        <thead><tr><th>Title</th><th>Artist</th><th>Album</th><th>Year</th><th>Size</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  async function deleteLibraryItem(button) {
+    const filename = button.dataset.deleteFile;
+    const title = button.dataset.deleteTitle || filename;
+    if (!confirm(`Delete "${title}"? This can't be undone.`)) return;
+    button.disabled = true;
+    try {
+      const res = await fetch(`${BACKEND}/api/library/${encodeURIComponent(filename)}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Delete failed (${res.status})`);
+      await refreshLibrary();
+    } catch (err) {
+      console.error(err);
+      alert("Could not delete the file.");
+      button.disabled = false;
+    }
+  }
+
+  libraryContainer.addEventListener("click", e => {
+    const delBtn = e.target.closest("[data-delete-file]");
+    if (delBtn) deleteLibraryItem(delBtn);
+  });
+
+  refreshLibraryBtn.addEventListener("click", refreshLibrary);
+</script>
+</body>
+</html>

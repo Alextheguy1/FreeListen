@@ -1,0 +1,10 @@
+backend/node_modules
+backend/bin
+backend/settings.json
+playlist-backend/__pycache__
+playlist-backend/venv
+**/*.log
+.git
+.env
+music/
+config/

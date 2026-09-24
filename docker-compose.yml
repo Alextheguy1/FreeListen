@@ -1,0 +1,32 @@
+services:
+  music-search:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: music-search
+    ports:
+      - "5051:5051"
+    volumes:
+      # Left side is the thing you'll actually want to change: point it at
+      # wherever downloaded MP3s should land (e.g. a TrueNAS dataset path
+      # like /mnt/tank/Music). Right side is fixed - matches MUSIC_DIR below.
+      - ${MUSIC_DIR_HOST:-./music}:/music
+      # Settings saved through the page's Settings panel (Spotify
+      # credentials, ListenBrainz token) persist here across restarts/updates
+      # instead of being lost when the container is recreated.
+      - ${CONFIG_DIR_HOST:-./config}:/config
+    environment:
+      - MUSIC_DIR=/music
+      - CONFIG_DIR=/config
+      - PLAYLIST_BACKEND_URL=http://playlist-backend:5058
+    depends_on:
+      - playlist-backend
+    restart: unless-stopped
+
+  playlist-backend:
+    build: ./playlist-backend
+    container_name: playlist-backend
+    # No ports published to the host - only music-search needs to reach it,
+    # over the internal Docker network (Compose gives it the hostname
+    # "playlist-backend" automatically, matching PLAYLIST_BACKEND_URL above).
+    restart: unless-stopped

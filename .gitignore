@@ -1,0 +1,26 @@
+# Dependencies
+backend/node_modules/
+playlist-backend/venv/
+playlist-backend/__pycache__/
+playlist-backend/*.pyc
+
+# Downloaded/fetched at install time - not source
+backend/bin/
+
+# Local secrets and state - never commit these
+backend/settings.json
+.env
+
+# Default local bind-mount targets from docker-compose.yml
+/music/
+/config/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
