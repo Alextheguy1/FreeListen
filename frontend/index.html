@@ -353,6 +353,22 @@
       </div>
       <div class="settings-form">
         <div class="settings-group">
+          <h2>Download quality</h2>
+          <p class="field-help">Applies to every download from here on - existing files aren't affected. Formats are tagged (title/artist/album/art) regardless of which you pick.</p>
+          <label>Audio format
+            <select id="setAudioFormat">
+              <option value="mp3">MP3</option>
+              <option value="flac">FLAC (lossless)</option>
+              <option value="opus">Opus</option>
+              <option value="m4a">AAC (M4A)</option>
+            </select>
+          </label>
+          <label id="audioQualityField">Audio quality
+            <select id="setAudioQuality"></select>
+          </label>
+          <p class="field-help" id="opusArtNote" hidden>Opus files can't carry embedded cover art (the format doesn't support it) - they'll still get title/artist/album/track tags.</p>
+        </div>
+        <div class="settings-group">
           <h2>ListenBrainz</h2>
           <p class="field-help">Makes the artist "Download top N tracks" button reliable - ListenBrainz gates that endpoint against scrapers and can intermittently reject unauthenticated requests.</p>
           <label>User Token
@@ -500,8 +516,53 @@
   const setListenbrainz = document.getElementById("setListenbrainz");
   const setSpotifyId = document.getElementById("setSpotifyId");
   const setSpotifySecret = document.getElementById("setSpotifySecret");
+  const setAudioFormat = document.getElementById("setAudioFormat");
+  const setAudioQuality = document.getElementById("setAudioQuality");
+  const audioQualityField = document.getElementById("audioQualityField");
+  const opusArtNote = document.getElementById("opusArtNote");
   const settingsSave = document.getElementById("settingsSave");
   const settingsStatus = document.getElementById("settingsStatus");
+
+  // mp3 is ffmpeg/LAME's 0(best)-9(worst) VBR scale; opus/m4a use an
+  // explicit target bitrate; flac is lossless, so there's nothing to pick.
+  const QUALITY_OPTIONS = {
+    mp3: [
+      { value: "0", label: "Best (~245 kbps)" },
+      { value: "2", label: "High (~190 kbps)" },
+      { value: "4", label: "Standard (~165 kbps)" },
+      { value: "6", label: "Small (~130 kbps)" },
+      { value: "8", label: "Smallest (~85 kbps)" },
+    ],
+    opus: [
+      { value: "320K", label: "Best (320 kbps)" },
+      { value: "256K", label: "High (256 kbps)" },
+      { value: "192K", label: "Standard (192 kbps)" },
+      { value: "128K", label: "Small (128 kbps)" },
+      { value: "96K", label: "Smallest (96 kbps)" },
+    ],
+    m4a: [
+      { value: "320K", label: "Best (320 kbps)" },
+      { value: "256K", label: "High (256 kbps)" },
+      { value: "192K", label: "Standard (192 kbps)" },
+      { value: "128K", label: "Small (128 kbps)" },
+      { value: "96K", label: "Smallest (96 kbps)" },
+    ],
+    flac: [],
+  };
+
+  function renderQualityOptions(format, currentValue) {
+    const opts = QUALITY_OPTIONS[format] || [];
+    opusArtNote.hidden = format !== "opus";
+    if (!opts.length) {
+      audioQualityField.hidden = true;
+      return;
+    }
+    audioQualityField.hidden = false;
+    setAudioQuality.innerHTML = opts.map(o => `<option value="${o.value}">${o.label}</option>`).join("");
+    setAudioQuality.value = opts.some(o => o.value === currentValue) ? currentValue : (opts[2] || opts[0]).value;
+  }
+
+  setAudioFormat.addEventListener("change", () => renderQualityOptions(setAudioFormat.value, null));
 
   async function loadSettings() {
     try {
@@ -512,6 +573,8 @@
       setListenbrainz.value = data.listenbrainzToken || "";
       setSpotifyId.value = data.spotifyClientId || "";
       setSpotifySecret.value = data.spotifyClientSecret || "";
+      setAudioFormat.value = data.audioFormat || "mp3";
+      renderQualityOptions(setAudioFormat.value, data.audioQuality);
     } catch (err) {
       console.warn("Could not load settings from backend:", err);
     }
@@ -525,6 +588,8 @@
         listenbrainzToken: setListenbrainz.value.trim(),
         spotifyClientId: setSpotifyId.value.trim(),
         spotifyClientSecret: setSpotifySecret.value.trim(),
+        audioFormat: setAudioFormat.value,
+        audioQuality: setAudioQuality.value,
       };
       const res = await fetch(`${BACKEND}/api/settings`, {
         method: "POST",

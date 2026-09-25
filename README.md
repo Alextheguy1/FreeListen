@@ -4,8 +4,8 @@ A self-hosted app for searching songs, albums, and artists in the
 [MusicBrainz](https://musicbrainz.org) database (with play-count data from
 [ListenBrainz](https://listenbrainz.org) and cover art from
 [Cover Art Archive](https://coverartarchive.org)), or loading a Spotify
-playlist - with one-click downloads of tagged MP3s, a download queue, and a
-library view, all through a single web UI.
+playlist - with one-click downloads of tagged audio files, a download queue,
+and a library view, all through a single web UI.
 
 ![status](https://img.shields.io/badge/status-personal%20project-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
@@ -24,28 +24,34 @@ delete), and **Settings**.
   tracks, with per-track or "download all" buttons.
 - Per-song **Download**: finds a lyrics-video version of the track (to avoid
   the sound effects/crowd noise/intros that often come with official music
-  videos), downloads it as an MP3, and tags it with title, artist, album,
-  year, genre, track number, and embedded cover art where available.
+  videos), downloads it, and tags it with title, artist, album, year, genre,
+  track number, and embedded cover art where available.
+- Configurable **download quality**: pick the output format (MP3, FLAC,
+  Opus, or AAC/M4A) and, for the lossy formats, the encode quality - a
+  global setting applied to every download, not decided for you. Every
+  format gets full metadata tags; only Opus can't carry embedded cover art
+  (a limitation of the format itself, not this app).
 - Per-artist **Download top N tracks**: downloads an artist's N most popular
   tracks (by real ListenBrainz play count), skipping remaster/live/concert
   versions and near-duplicate titles. N is adjustable in the UI, with no
   upper limit.
 - Playlist **Download all**: downloads every track in a loaded playlist the
   same way, tagged with the metadata Spotify has for each track.
-- Library layout: saves into `Artist/Album/NN - Title.mp3` (or
-  `Artist/Title.mp3` when no album is known) rather than one flat folder -
+- Library layout: saves into `Artist/Album/NN - Title.<ext>` (or
+  `Artist/Title.<ext>` when no album is known) rather than one flat folder -
   point Navidrome, Jellyfin, or any other Subsonic/media-server-style app at
   the same directory and it'll organize correctly.
 - **Activity page**: a live queue of downloads currently in progress.
 - **Library page**: everything currently saved to disk, read back from each
-  file's actual ID3 tags, with a delete button per track (which also prunes
-  any album/artist folder left empty behind it).
+  file's actual tags, with a delete button per track (which also prunes any
+  album/artist folder left empty behind it).
 - Duplicate detection: re-downloading a track you already have is a no-op
   (matched by sanitized title within that track's artist/album folder), so
   batch downloads are safe to re-run.
 - Automatic retry with backoff on the transient failures YouTube downloads
   occasionally hit.
-- Settings page for API keys - nothing is hardcoded in source.
+- Settings page for API keys and download quality - nothing is hardcoded in
+  source.
 
 ## Architecture
 
@@ -69,7 +75,7 @@ Three independent pieces:
 
 ```bash
 cp .env.example .env
-# edit .env - at minimum set MUSIC_DIR_HOST to where you want MP3s to land
+# edit .env - at minimum set MUSIC_DIR_HOST to where you want downloads to land
 docker compose up -d --build
 ```
 
@@ -131,8 +137,11 @@ python app.py
 
 ## Settings (API keys)
 
-Open the **Settings** page in the app to add:
+Open the **Settings** page in the app to configure:
 
+- **Download quality** - output format (MP3/FLAC/Opus/AAC) and, for the
+  lossy ones, encode quality. Applies to every download from then on;
+  existing files aren't touched.
 - **ListenBrainz token** - makes the artist "Download top N tracks" button
   reliable (ListenBrainz gates that endpoint against scrapers and can
   intermittently reject unauthenticated requests). Get a free one from your
@@ -155,7 +164,11 @@ files.
 - **Download**: the page never talks to YouTube directly. It sends the
   backend a search string like `"<artist> <title> lyrics"`; the backend hands
   that to yt-dlp's `ytsearch1:` pseudo-URL, which resolves and downloads the
-  top match without needing any API key or quota.
+  top match in whatever format/quality is set in Settings, without needing
+  any API key or quota. Tags (and cover art, where the format supports it)
+  are embedded afterward with a direct `ffmpeg -metadata` pass rather than a
+  format-specific tagging library, so MP3/FLAC/Opus/M4A are all tagged the
+  same way.
 - **Artist top tracks**: sourced from ListenBrainz's
   `top-recordings-for-artist` endpoint, which returns an artist's recordings
   already ranked by real play count - far more reliable than trying to infer
@@ -175,12 +188,14 @@ files.
   (title, artist, status, timing) exposed via `GET /api/activity`. It's
   intentionally not persisted to disk - a restart just starts a fresh log.
 - **Library**: `GET /api/library` walks the save directory (now
-  `Artist/Album/Track.mp3`, not a flat folder) and reads each file's actual
-  ID3 tags back out, so what you see always matches what's really on disk.
-  Deleting (`DELETE /api/library/:relpath`, with the relative path
-  URL-encoded by the frontend) resolves the path and checks it's still
-  inside the save directory before touching anything, so it can't be tricked
-  into deleting outside it - then prunes any album/artist folder left empty.
+  `Artist/Album/Track.<ext>`, not a flat folder) and reads each file's actual
+  tags back out via `ffmpeg -i` (cached by path+modification time, so a
+  re-scan only re-reads files that actually changed), so what you see always
+  matches what's really on disk. Deleting (`DELETE /api/library/:relpath`,
+  with the relative path URL-encoded by the frontend) resolves the path and
+  checks it's still inside the save directory before touching anything, so
+  it can't be tricked into deleting outside it - then prunes any
+  album/artist folder left empty.
 
 ## Known limitations
 

@@ -3,9 +3,9 @@ const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const { execFile } = require("child_process");
 const ytDlp = require("yt-dlp-exec");
 const ffmpegPath = require("ffmpeg-static");
-const NodeID3 = require("node-id3");
 
 const app = express();
 app.use(cors());
@@ -39,13 +39,28 @@ const PLAYLIST_BACKEND_URL = process.env.PLAYLIST_BACKEND_URL || "";
 const CONFIG_DIR = process.env.CONFIG_DIR || __dirname;
 const SETTINGS_FILE = path.join(CONFIG_DIR, "settings.json");
 
+// Formats yt-dlp/ffmpeg can produce, and which of them ffmpeg can embed a
+// cover image into. Ogg/Opus's muxer rejects an attached video stream
+// entirely (confirmed by hand) - Opus downloads still get title/artist/etc
+// tags, just no artwork.
+const AUDIO_FORMATS = ["mp3", "flac", "opus", "m4a"];
+const SUPPORTS_EMBEDDED_ART = { mp3: true, flac: true, m4a: true, opus: false };
+// mp3 uses ffmpeg/LAME's 0(best)-9(worst) VBR scale; flac is lossless (no
+// quality setting applies); opus/m4a use an explicit target bitrate.
+const DEFAULT_QUALITY = { mp3: "4", flac: "", opus: "192K", m4a: "192K" };
+
 function loadSettings() {
   let saved = {};
   try { saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8")); } catch {}
+  const audioFormat = AUDIO_FORMATS.includes(saved.audioFormat) ? saved.audioFormat
+    : AUDIO_FORMATS.includes(process.env.AUDIO_FORMAT) ? process.env.AUDIO_FORMAT : "mp3";
   return {
     spotifyClientId: saved.spotifyClientId ?? process.env.SPOTIFY_CLIENT_ID ?? "",
     spotifyClientSecret: saved.spotifyClientSecret ?? process.env.SPOTIFY_CLIENT_SECRET ?? "",
     listenbrainzToken: saved.listenbrainzToken ?? process.env.LISTENBRAINZ_TOKEN ?? "",
+    audioFormat,
+    audioQuality: typeof saved.audioQuality === "string" && saved.audioQuality
+      ? saved.audioQuality : (process.env.AUDIO_QUALITY || DEFAULT_QUALITY[audioFormat]),
   };
 }
 
@@ -59,10 +74,19 @@ app.get("/api/settings", (req, res) => {
 app.post("/api/settings", (req, res) => {
   const body = req.body || {};
   const clean = v => (typeof v === "string" ? v.trim() : undefined);
+  const audioFormat = AUDIO_FORMATS.includes(body.audioFormat) ? body.audioFormat : settings.audioFormat;
+  // Quality is format-specific (VBR level vs bitrate) - a value left over
+  // from switching formats on the frontend wouldn't make sense here, so
+  // anything not shaped like "<digit>" or "<number>K" falls back to that
+  // format's default rather than getting passed straight to ffmpeg.
+  const rawQuality = clean(body.audioQuality);
+  const qualityValid = rawQuality != null && (/^[0-9]$/.test(rawQuality) || /^\d+K$/i.test(rawQuality));
   settings = {
     spotifyClientId: clean(body.spotifyClientId) ?? settings.spotifyClientId,
     spotifyClientSecret: clean(body.spotifyClientSecret) ?? settings.spotifyClientSecret,
     listenbrainzToken: clean(body.listenbrainzToken) ?? settings.listenbrainzToken,
+    audioFormat,
+    audioQuality: qualityValid ? rawQuality : DEFAULT_QUALITY[audioFormat],
   };
   spotifyToken = null; // credentials may have changed - drop the cached token
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
@@ -76,6 +100,116 @@ app.post("/api/settings", (req, res) => {
 const DENO_DIR = path.join(__dirname, "bin");
 const ytDlpEnv = { ...process.env, PATH: `${DENO_DIR}${path.delimiter}${process.env.PATH}` };
 
+function runFfmpeg(args) {
+  return new Promise((resolve, reject) => {
+    execFile(ffmpegPath, args, { maxBuffer: 1024 * 1024 * 20 }, (err, stdout, stderr) => {
+      if (err) reject(new Error(stderr?.split("\n").slice(-5).join("\n") || err.message));
+      else resolve();
+    });
+  });
+}
+
+// Embeds tags (and, where the format supports it, cover art) by muxing the
+// already-encoded audio into a new container with -c copy - no re-encoding,
+// so this doesn't touch audio quality. Ogg/Opus's muxer rejects an attached
+// video stream outright, so art is skipped there regardless of canEmbedArt.
+async function embedMetadata(srcPath, destPath, format, tags, coverBuffer) {
+  const canEmbedArt = !!coverBuffer && SUPPORTS_EMBEDDED_ART[format];
+  const coverPath = canEmbedArt ? `${srcPath}.cover.jpg` : null;
+
+  async function run(withArt) {
+    const args = ["-y", "-i", srcPath];
+    if (withArt) args.push("-i", coverPath, "-map", "0:a", "-map", "1:v");
+    args.push("-c", "copy");
+    if (format === "mp3") args.push("-id3v2_version", "3");
+    const meta = { title: tags.title, artist: tags.artist };
+    if (tags.album) meta.album = tags.album;
+    if (tags.year) meta.date = tags.year;
+    if (tags.genre) meta.genre = tags.genre;
+    if (tags.trackNumber) meta.track = tags.trackNumber;
+    for (const [k, v] of Object.entries(meta)) args.push("-metadata", `${k}=${v}`);
+    if (withArt) {
+      args.push("-metadata:s:v", "title=Album cover", "-metadata:s:v", "comment=Cover (front)",
+        "-disposition:v:0", "attached_pic");
+    }
+    args.push(destPath);
+    await runFfmpeg(args);
+  }
+
+  try {
+    if (canEmbedArt) fs.writeFileSync(coverPath, coverBuffer);
+    try {
+      await run(canEmbedArt);
+    } catch (err) {
+      // A malformed/unexpected image response shouldn't take the whole
+      // download down - retry with just the text tags.
+      if (!canEmbedArt) throw err;
+      console.warn(`Tag embed with cover art failed for "${tags.title}", retrying without it:`, err.message);
+      await run(false);
+    }
+  } finally {
+    if (coverPath) fs.rm(coverPath, () => {});
+  }
+}
+
+// Reads tags back via `ffmpeg -i` (no output file) rather than ffprobe -
+// ffprobe-static has no Linux ARM64 build, and this app already depends on
+// ffmpeg-static (which does), so this avoids a second, less-portable binary.
+// ffmpeg always "fails" with no output specified, but still prints the full
+// probe (container tags AND per-stream tags, which is where Ogg/Opus keeps
+// them) to stderr first.
+function probeMetadata(filePath) {
+  return new Promise(resolve => {
+    execFile(ffmpegPath, ["-i", filePath], { maxBuffer: 1024 * 1024 * 10 }, (err, stdout, stderr) => {
+      const tags = {};
+      // The embedded-art picture is itself a "stream" with its own
+      // title/comment ("Album cover" / "Cover (front)", set when writing) -
+      // skip its metadata block so it can't overwrite the real track tags,
+      // which live at the container level and/or on the audio stream.
+      let inNonAudioStream = false;
+      for (const line of (stderr || "").split(/\r?\n/)) {
+        if (/^\s+Stream #\d+:\d+.*:\s*Audio:/.test(line)) inNonAudioStream = false;
+        else if (/^\s+Stream #\d+:\d+.*:\s*(Video|Subtitle|Data):/.test(line)) inNonAudioStream = true;
+        if (inNonAudioStream) continue;
+        const m = line.match(/^\s{2,}([A-Za-z][\w -]*?)\s{2,}:\s(.*)$/);
+        if (m) tags[m[1].trim().toLowerCase()] = m[2].trim();
+      }
+      resolve({
+        title: tags.title || null,
+        artist: tags.artist || null,
+        album: tags.album || null,
+        year: (tags.date || "").slice(0, 4) || null,
+        genre: tags.genre || null,
+      });
+    });
+  });
+}
+
+// Spawning ffmpeg per file makes a from-scratch library scan slow on a large
+// collection, so results are cached by path+mtime - a re-scan after the
+// first only re-probes files that actually changed.
+const tagCache = new Map(); // absPath -> { mtimeMs, tags }
+async function readAudioTags(filePath, mtimeMs) {
+  const cached = tagCache.get(filePath);
+  if (cached && cached.mtimeMs === mtimeMs) return cached.tags;
+  const tags = await probeMetadata(filePath);
+  tagCache.set(filePath, { mtimeMs, tags });
+  return tags;
+}
+
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 function sanitizeForFilename(s) {
   return String(s)
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
@@ -83,15 +217,20 @@ function sanitizeForFilename(s) {
     .replace(/\s+/g, " ");
 }
 
+const AUDIO_EXT_RE = new RegExp(`\\.(${AUDIO_FORMATS.join("|")})$`, "i");
+
 // Loose match for "is this already downloaded": same sanitized filename,
-// ignoring case and a trailing " (2)"-style suffix from an older save.
+// ignoring case, a trailing " (2)"-style suffix, and file extension - so
+// switching the audio format setting later doesn't cause a redundant
+// second copy of a track you already have in the old format.
 function findExistingDownload(dir, baseName) {
   const target = baseName.toLowerCase();
   let entries;
   try { entries = fs.readdirSync(dir); } catch { return null; } // dir may not exist yet
   for (const entry of entries) {
-    if (!entry.toLowerCase().endsWith(".mp3")) continue;
-    const stem = entry.slice(0, -4).toLowerCase().replace(/\s\(\d+\)$/, "");
+    const m = entry.match(AUDIO_EXT_RE);
+    if (!m) continue;
+    const stem = entry.slice(0, -m[0].length).toLowerCase().replace(/\s\(\d+\)$/, "");
     if (stem === target) return entry;
   }
   return null;
@@ -128,14 +267,14 @@ function relKey(absPath) {
   return path.relative(SAVE_DIR, absPath).split(path.sep).join("/");
 }
 
-function walkMp3Files(dir) {
+function walkAudioFiles(dir) {
   let results = [];
   let entries;
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return results; }
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) results = results.concat(walkMp3Files(full));
-    else if (entry.isFile() && entry.name.toLowerCase().endsWith(".mp3")) results.push(full);
+    if (entry.isDirectory()) results = results.concat(walkAudioFiles(full));
+    else if (entry.isFile() && AUDIO_EXT_RE.test(entry.name)) results.push(full);
   }
   return results;
 }
@@ -183,17 +322,17 @@ app.delete("/api/activity", (req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/api/library", (req, res) => {
+app.get("/api/library", async (req, res) => {
   try {
-    const files = walkMp3Files(SAVE_DIR);
-    const items = files.map(filePath => {
+    const files = walkAudioFiles(SAVE_DIR);
+    const items = await mapLimit(files, 6, async filePath => {
       const stat = fs.statSync(filePath);
-      const tags = NodeID3.read(filePath) || {};
+      const tags = await readAudioTags(filePath, stat.mtimeMs);
       const filename = path.basename(filePath);
       return {
         path: relKey(filePath),
         filename,
-        title: tags.title || filename.replace(/\.mp3$/i, ""),
+        title: tags.title || filename.replace(AUDIO_EXT_RE, ""),
         artist: tags.artist || null,
         album: tags.album || null,
         year: tags.year || null,
@@ -220,7 +359,7 @@ app.delete("/api/library/:relpath", (req, res) => {
   if (resolved !== root && !resolved.startsWith(root + path.sep)) {
     return res.status(400).json({ error: "Invalid path" });
   }
-  if (!resolved.toLowerCase().endsWith(".mp3")) {
+  if (!AUDIO_EXT_RE.test(resolved)) {
     return res.status(400).json({ error: "Not a valid library file" });
   }
   if (!fs.existsSync(resolved)) {
@@ -228,6 +367,7 @@ app.delete("/api/library/:relpath", (req, res) => {
   }
   try {
     fs.unlinkSync(resolved);
+    tagCache.delete(resolved);
     cleanupEmptyDirs(path.dirname(resolved));
     console.log(`Deleted: ${relKey(resolved)}`);
     res.json({ ok: true });
@@ -361,6 +501,9 @@ app.post("/api/download", async (req, res) => {
   const trackNum = Number(trackNumber);
   if (Number.isInteger(trackNum) && trackNum > 0 && trackNum < 1000) tags.trackNumber = String(trackNum);
 
+  const format = AUDIO_FORMATS.includes(settings.audioFormat) ? settings.audioFormat : "mp3";
+  const quality = settings.audioQuality || DEFAULT_QUALITY[format];
+
   const destDir = destDirFor(artist, tags.album);
   const baseName = buildFilename(title, trackNumber);
   const activityRecord = addActivity({ title, artist, album: tags.album || null });
@@ -378,56 +521,45 @@ app.post("/api/download", async (req, res) => {
   try {
     // No API key/quota involved: yt-dlp's own "ytsearchN:" pseudo-URL scrapes
     // YouTube's search directly and downloads the top match.
-    await ytDlp(`ytsearch1:${query}`, {
+    const ytDlpOpts = {
       output: path.join(tmpDir, "%(id)s.%(ext)s"),
       extractAudio: true,
-      audioFormat: "mp3",
-      // LAME VBR quality (0=best/~245kbps ... 9=worst/~65kbps). YouTube's
-      // source audio is itself only ~128kbps, so 0 was wasting space without
-      // adding real fidelity; 4 (~165kbps) stays comfortably above the
-      // source's bitrate with no audible difference, at roughly half the size.
-      audioQuality: 4,
+      audioFormat: format,
       ffmpegLocation: ffmpegPath,
       noPlaylist: true,
-    }, { env: ytDlpEnv });
+    };
+    // FLAC is lossless - there's no bitrate/VBR knob to set. For the others,
+    // this is either an mp3 "0(best)-9(worst)" VBR level or an explicit
+    // "<N>K" bitrate (opus/m4a) - yt-dlp/ffmpeg tell those apart by shape.
+    if (format !== "flac" && quality) ytDlpOpts.audioQuality = quality;
+    await ytDlp(`ytsearch1:${query}`, ytDlpOpts, { env: ytDlpEnv });
 
-    const produced = fs.readdirSync(tmpDir).find(f => f.endsWith(".mp3"));
-    if (!produced) throw new Error("Conversion did not produce an mp3 file");
-    const mp3Path = path.join(tmpDir, produced);
+    const produced = fs.readdirSync(tmpDir).find(f => f.toLowerCase().endsWith(`.${format}`));
+    if (!produced) throw new Error(`Conversion did not produce a .${format} file`);
+    const rawPath = path.join(tmpDir, produced);
 
     // Best-effort: a missing/unreachable cover shouldn't fail the download.
-    if (typeof coverArtUrl === "string" && coverArtUrl.trim()) {
+    let coverBuffer = null;
+    if (typeof coverArtUrl === "string" && coverArtUrl.trim() && SUPPORTS_EMBEDDED_ART[format]) {
       try {
         const imgRes = await fetch(coverArtUrl);
-        if (imgRes.ok) {
-          tags.image = {
-            mime: imgRes.headers.get("content-type") || "image/jpeg",
-            type: { id: 3, name: "front cover" },
-            description: "",
-            imageBuffer: Buffer.from(await imgRes.arrayBuffer()),
-          };
-        }
+        if (imgRes.ok) coverBuffer = Buffer.from(await imgRes.arrayBuffer());
       } catch (e) {
         console.warn(`Cover art fetch failed for "${title}":`, e.message || e);
       }
     }
 
-    let tagged = NodeID3.write(tags, mp3Path);
-    if (tagged !== true && tags.image) {
-      // Don't let a malformed/unexpected image response take the whole
-      // download down - retry with just the text tags.
-      console.warn(`Tag write with cover art failed for "${title}", retrying without it`);
-      delete tags.image;
-      tagged = NodeID3.write(tags, mp3Path);
-    }
-    if (tagged !== true) throw new Error("Writing ID3 tags failed");
+    const taggedPath = path.join(tmpDir, `tagged.${format}`);
+    await embedMetadata(rawPath, taggedPath, format, tags, coverBuffer);
 
     // Re-check right before writing in case a concurrent request just saved
     // the same track while this one was downloading.
     fs.mkdirSync(destDir, { recursive: true });
     const stillMissing = !findExistingDownload(destDir, baseName);
-    const destPath = stillMissing ? path.join(destDir, `${baseName}.mp3`) : uniquePath(destDir, baseName, ".mp3");
-    fs.copyFileSync(mp3Path, destPath);
+    const destPath = stillMissing
+      ? path.join(destDir, `${baseName}.${format}`)
+      : uniquePath(destDir, baseName, `.${format}`);
+    fs.copyFileSync(taggedPath, destPath);
 
     console.log(`Saved: ${relKey(destPath)}`);
     finishActivity(activityRecord, "completed", { filename: path.basename(destPath) });
