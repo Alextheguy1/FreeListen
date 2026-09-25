@@ -1,3 +1,5 @@
 flask
 flask-cors
 SpotipyFree
+redis
+websockets

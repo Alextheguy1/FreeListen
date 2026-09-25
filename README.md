@@ -55,7 +55,7 @@ delete), and **Settings**.
 
 ## Architecture
 
-Three independent pieces:
+Two pieces of code, packaged as one Docker image/container:
 
 - **`frontend/`** - a static page, no build step, no framework. Served by
   `backend/` (so the whole app is just "visit one URL"); can also be opened
@@ -71,6 +71,13 @@ Three independent pieces:
   `backend/` proxies playlist requests to it when available, falling back to
   its own (credential-optional, ~50-track-capped) logic otherwise.
 
+In Docker, both run inside the same container as two processes managed by
+`supervisord` (see `Dockerfile`/`supervisord.conf`), talking to each other
+over `localhost` - the same single-image approach apps like Lidarr use for
+their own internal services, so this deploys as one app instead of two. For
+local (non-Docker) development they're still just two separate things you
+can run independently - see Option B below.
+
 ## Option A: Docker (recommended - e.g. for TrueNAS)
 
 ```bash
@@ -79,30 +86,28 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Then visit `http://<the-host's-address>:5051` - that's the whole app,
-frontend included. On TrueNAS, `MUSIC_DIR_HOST` in `.env` should point at a
-dataset path (e.g. `/mnt/tank/Music`), the same way apps like Sonarr/Radarr
-let you map a media directory instead of hardcoding one - nothing about the
-save location is baked into the image.
-
-This starts both services (`music-search` and `playlist-backend`) wired
-together automatically. Playlists work fully (no cap, no credentials) out of
-the box via `playlist-backend`.
+Then visit `http://<the-host's-address>:5051` - that's the whole app. One
+image, one container; playlists work fully (no cap, no credentials) out of
+the box. On TrueNAS, `MUSIC_DIR_HOST` in `.env` should point at a dataset
+path (e.g. `/mnt/tank/Music`), the same way apps like Sonarr/Radarr let you
+map a media directory instead of hardcoding one - nothing about the save
+location is baked into the image.
 
 ### Deploying to TrueNAS SCALE specifically
 
-TrueNAS SCALE's "Custom App" wizard installs one pre-built image per app
-rather than a multi-container Compose file, so the straightforward path is
-the Shell, not that wizard:
+Since this is one image now, it fits TrueNAS's "Custom App" wizard directly
+(no more needing two separate apps for the two backends):
 
 1. Copy this folder onto the NAS (SMB share, or `scp -O -r`).
-2. SSH/Shell in, `cd` into the folder, `cp .env.example .env` and edit it.
-3. `sudo docker compose up -d --build`.
+2. SSH/Shell in, `cd` into the folder, `sudo docker build -t freelisten .`
+3. In the TrueNAS UI: **Apps → Discover Apps → Custom App**. Point the image
+   at `freelisten:latest`, map a host path to container path `/music` and
+   another to `/config`, publish container port `5051` to whatever host port
+   you want, and deploy.
 
-If you specifically want it to show up in the Apps page with its own
-start/stop controls, build the two images with `docker build` and register
-each as its own Custom App instead - see the comments in `docker-compose.yml`
-for the equivalent settings (env vars, volumes, ports) to enter by hand.
+Or skip the UI and just run `docker compose up -d --build` over SSH the same
+way as any other Docker host - the compose file works either way, it's just
+one service now.
 
 ## Option B: Run it directly (no Docker)
 
@@ -216,19 +221,19 @@ files.
 .
 ├── README.md
 ├── LICENSE
+├── Dockerfile                   # builds the single freelisten image
+├── supervisord.conf              # runs backend/ + playlist-backend/ as one container
 ├── docker-compose.yml
 ├── .env.example
 ├── frontend/
 │   └── index.html              # Search / Activity / Library / Settings UI
 ├── backend/
-│   ├── Dockerfile
 │   ├── package.json
 │   ├── server.js                # all API routes (see below)
 │   ├── scripts/
 │   │   └── setup-deno.js        # postinstall: fetches the Deno binary
 │   └── bin/                     # created by setup-deno.js (gitignored)
 └── playlist-backend/
-    ├── Dockerfile
     ├── requirements.txt
     └── app.py                   # GET /api/playlist (SpotipyFree)
 ```
