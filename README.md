@@ -186,9 +186,16 @@ files.
   app access token (cached until it expires) and paginates through the
   official Web API. If `playlist-backend` is configured (the default in
   Docker), that's tried first instead, since it needs no credentials at all
-  and isn't capped. Either way, each track goes through the exact same
-  download pipeline as everything else - same query-building, tagging,
-  duplicate detection, and retry logic.
+  and isn't capped - though its playlist listing doesn't include real
+  album/year data (SpotipyFree limitation), so the frontend looks that up
+  per track (`GET /api/playlist/track/:id`) right before actually
+  downloading it, rather than for the whole playlist upfront (each lookup
+  takes ~2-5s - fine for one track at download time, would be several
+  minutes for a large playlist just to display it). Cover art for those
+  tracks then comes from the same MusicBrainz/Cover Art Archive lookup song
+  search uses, once a real album name is known. Either way, each track goes
+  through the exact same download pipeline as everything else - same
+  query-building, tagging, duplicate detection, and retry logic.
 - **Activity**: the backend keeps an in-memory log of every download attempt
   (title, artist, status, timing) exposed via `GET /api/activity`. It's
   intentionally not persisted to disk - a restart just starts a fresh log.
@@ -245,6 +252,7 @@ files.
 | GET    | `/api/settings`         | Read saved API keys                       |
 | POST   | `/api/settings`         | Save API keys                             |
 | GET    | `/api/playlist`         | Resolve a Spotify playlist to a track list |
+| GET    | `/api/playlist/track/:id` | Real album/year for one playlist track  |
 | POST   | `/api/download`         | Download + tag + save one track           |
 | GET    | `/api/activity`         | Current queue + history                   |
 | DELETE | `/api/activity`         | Clear finished entries from history        |

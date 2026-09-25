@@ -1000,7 +1000,46 @@
     return top;
   }
 
+  // Playlist tracks from playlist-backend (SpotipyFree) arrive with real
+  // title/artist/trackNumber but no album/year (that source's playlist
+  // listing doesn't carry them) and no cover art. Rather than looking this
+  // up for every track when the playlist loads - each lookup takes ~2-5s,
+  // which would mean several minutes before a large playlist even displays -
+  // it's fetched here instead, right before a track is actually downloaded.
+  // Mutates rec in place and marks it done so a retry doesn't redo the work.
+  async function enrichPlaylistTrack(rec) {
+    if (rec._enriched || !rec.id || rec.album) return;
+    rec._enriched = true;
+    try {
+      const res = await fetch(`${BACKEND}/api/playlist/track/${encodeURIComponent(rec.id)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.album) rec.album = data.album;
+        if (data.year) rec.year = data.year;
+      }
+    } catch (err) {
+      console.warn(`Track enrichment failed for "${rec.title}":`, err);
+    }
+    if (!rec.album || rec.coverArtUrl) return;
+    // Cover art isn't sourced from Spotify at all - once a real album name
+    // is known, look it up the same way song search does: MusicBrainz
+    // release search -> Cover Art Archive.
+    try {
+      const esc2 = s => s.replace(/"/g, '\\"');
+      const q = `artist:"${esc2(rec.artist)}" AND release:"${esc2(rec.album)}"`;
+      const res = await mbFetch(`https://musicbrainz.org/ws/2/release/?query=${encodeURIComponent(q)}&fmt=json&limit=1`);
+      if (res.ok) {
+        const data = await res.json();
+        const releaseId = data.releases?.[0]?.id;
+        if (releaseId) rec.coverArtUrl = coverArtUrlFor(releaseId);
+      }
+    } catch (err) {
+      console.warn(`Cover art lookup failed for "${rec.title}":`, err);
+    }
+  }
+
   async function downloadOneTrack(rec, artist) {
+    await enrichPlaylistTrack(rec);
     const data = await postDownload({
       query: lyricsQueryFor(rec.title, artist), title: rec.title, artist,
       album: rec.album, year: rec.year, genre: rec.genre,
@@ -1163,6 +1202,16 @@
   async function downloadPlaylistTrack(button) {
     const rec = current.items[Number(button.dataset.dlPlaylist)];
     if (!rec) return;
+    if (rec.id && !rec.album) {
+      // Give the button some feedback for the ~2-5s enrichment lookup below,
+      // instead of it looking unresponsive until runDownload takes over.
+      const original = button.innerHTML;
+      button.disabled = true;
+      button.textContent = "Looking up…";
+      await enrichPlaylistTrack(rec);
+      button.innerHTML = original;
+      button.disabled = false;
+    }
     await runDownload(button, {
       query: lyricsQueryFor(rec.title, rec.artist), title: rec.title, artist: rec.artist, album: rec.album, year: rec.year,
       trackNumber: rec.trackNumber, coverArtUrl: rec.coverArtUrl

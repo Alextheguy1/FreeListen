@@ -485,6 +485,25 @@ app.get("/api/playlist", async (req, res) => {
   }
 });
 
+// Real album/year for one playlist track, looked up on demand right before
+// it's downloaded - playlist-backend's own listing doesn't carry them (see
+// playlist-backend/app.py), and looking this up for a whole playlist
+// upfront would take minutes (each lookup is ~2-5s). Only meaningful when
+// playlist-backend is configured; the official-API/embed playlist sources
+// already return real album data directly in the listing.
+app.get("/api/playlist/track/:id", async (req, res) => {
+  if (!PLAYLIST_BACKEND_URL) return res.status(404).json({ error: "Not available" });
+  try {
+    const proxyRes = await fetch(`${PLAYLIST_BACKEND_URL}/api/track/${encodeURIComponent(req.params.id)}`);
+    const data = await proxyRes.json().catch(() => ({}));
+    if (!proxyRes.ok) throw new Error(data.error || `Track lookup failed (${proxyRes.status})`);
+    res.json(data);
+  } catch (err) {
+    console.error("Track enrichment failed:", err.message || err);
+    res.status(500).json({ error: err.message || "Track lookup failed" });
+  }
+});
+
 app.post("/api/download", async (req, res) => {
   const { query, title, artist, album, year, genre, trackNumber, coverArtUrl } = req.body || {};
   if (typeof query !== "string" || !query.trim()) {

@@ -6,9 +6,12 @@ alongside the Node backend's /api/playlist (embed-page scraping, capped at
 there) as a third option: full playlists, no Spotify account or credentials
 needed at all.
 
-Response shape matches the Node backend's /api/playlist exactly, so the
-frontend only needs to change which URL it calls - nothing else:
-    { "name": str, "tracks": [{"title", "artist", "album", "year"}], "truncated": bool }
+GET /api/playlist response shape matches the Node backend's /api/playlist,
+so the frontend only needs to change which URL it calls - nothing else:
+    { "name": str, "tracks": [{"id", "title", "artist", "album", "year", "trackNumber"}], "truncated": bool }
+album/year are always null here (SpotipyFree's playlist listing doesn't
+carry them) - GET /api/track/<id> below fills them in for one track at a
+time, on demand.
 
 Run:
     pip install -r requirements.txt
@@ -42,30 +45,46 @@ def get_client():
 
 def extract_track(item):
     """Adapts SpotipyFree's per-item shape (spotipy-compatible: {"track": {...}})
-    to the flat {title, artist, album, year, trackNumber, coverArtUrl} shape
-    the frontend expects."""
+    to the flat {id, title, artist, album, year, trackNumber} shape the
+    frontend expects. playlist_items() doesn't return real album data (its
+    "album" is always {}) - the frontend fills album/year in later via
+    GET /api/track/<id> below, only for tracks it actually downloads, since
+    that lookup is too slow (~2-5s each) to do for a whole playlist upfront.
+    Cover art isn't sourced from Spotify at all - the frontend looks it up
+    on MusicBrainz/Cover Art Archive once it has a real album name."""
     track = item.get("track") if isinstance(item, dict) else None
     if not track or not track.get("name"):
         return None
 
     artists = track.get("artists") or []
     artist = ", ".join(a.get("name", "") for a in artists if a.get("name")) or "Unknown artist"
-
-    album = track.get("album") or {}
-    release_date = album.get("release_date") or ""
     track_number = track.get("track_number")
-    # Spotify lists images largest-first; index 1 is usually a ~300px
-    # "medium" size, a reasonable embedded-art size without bloating files.
-    images = album.get("images") or []
-    cover_art_url = (images[1] if len(images) > 1 else images[0])["url"] if images else None
 
     return {
+        "id": track.get("id"),
         "title": track["name"],
         "artist": artist,
-        "album": album.get("name"),
-        "year": release_date[:4] if release_date else None,
+        "album": None,
+        "year": None,
         "trackNumber": track_number if isinstance(track_number, int) else None,
-        "coverArtUrl": cover_art_url,
+    }
+
+
+def extract_full_track(t):
+    """Shape returned by sp.track() (a single-track lookup) is different
+    from playlist_items()'s per-item shape, but *does* have real album data."""
+    if not t or not t.get("name"):
+        return None
+    album = t.get("album") or {}
+    date = album.get("date") or {}
+    year = None
+    if isinstance(date, dict):
+        year = date.get("year")
+    elif isinstance(date, str):
+        year = date[:4] or None
+    return {
+        "album": album.get("name"),
+        "year": str(year) if year else None,
     }
 
 
@@ -102,6 +121,21 @@ def get_playlist():
     except Exception as exc:  # noqa: BLE001 - surface whatever SpotipyFree raises
         traceback.print_exc()
         return jsonify({"error": str(exc) or "Playlist fetch failed"}), 500
+
+
+@app.route("/api/track/<track_id>")
+def get_track(track_id):
+    """Real album/year for one track, on demand - only called for tracks
+    that are actually being downloaded, since this lookup takes ~2-5s."""
+    try:
+        sp = get_client()
+        full = extract_full_track(sp.track(track_id))
+        if not full:
+            return jsonify({"error": "Track not found"}), 404
+        return jsonify(full)
+    except Exception as exc:  # noqa: BLE001
+        traceback.print_exc()
+        return jsonify({"error": str(exc) or "Track lookup failed"}), 500
 
 
 if __name__ == "__main__":
