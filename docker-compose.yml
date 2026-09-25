@@ -1,5 +1,10 @@
 services:
   freelisten:
+    # Pulls the published image by default (built by GitHub Actions on every
+    # push - see .github/workflows/docker-publish.yml). `build: .` is also
+    # here so `docker compose build` still works for local development
+    # without needing to touch this file.
+    image: ghcr.io/alextheguy1/freelisten:latest
     build: .
     container_name: freelisten
     ports:

@@ -80,10 +80,18 @@ can run independently - see Option B below.
 
 ## Option A: Docker (recommended - e.g. for TrueNAS)
 
+A prebuilt image is published to GitHub Container Registry on every change
+(see `.github/workflows/docker-publish.yml`), the same way Sonarr/Radarr/etc.
+ship - no source code, no local build, no git needed at all to run it.
+
 ```bash
+mkdir freelisten && cd freelisten
+curl -O https://raw.githubusercontent.com/alextheguy1/FreeListen/main/docker-compose.yml
+curl -O https://raw.githubusercontent.com/alextheguy1/FreeListen/main/.env.example
 cp .env.example .env
 # edit .env - at minimum set MUSIC_DIR_HOST to where you want downloads to land
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 Then visit `http://<the-host's-address>:5051` - that's the whole app. One
@@ -93,21 +101,40 @@ path (e.g. `/mnt/tank/Music`), the same way apps like Sonarr/Radarr let you
 map a media directory instead of hardcoding one - nothing about the save
 location is baked into the image.
 
+**Updating** is the same as any other Docker app from here on - no git clone
+needed:
+```bash
+docker compose pull && docker compose up -d
+```
+
 ### Deploying to TrueNAS SCALE specifically
 
-Since this is one image now, it fits TrueNAS's "Custom App" wizard directly
-(no more needing two separate apps for the two backends):
+Since it's a published image, it fits TrueNAS's "Custom App" wizard exactly
+like any other app in the Apps catalog - no SSH, no build:
 
-1. Copy this folder onto the NAS (SMB share, or `scp -O -r`).
-2. SSH/Shell in, `cd` into the folder, `sudo docker build -t freelisten .`
-3. In the TrueNAS UI: **Apps → Discover Apps → Custom App**. Point the image
-   at `freelisten:latest`, map a host path to container path `/music` and
-   another to `/config`, publish container port `5051` to whatever host port
-   you want, and deploy.
+1. **Apps → Discover Apps → Custom App**.
+2. Image repository: `ghcr.io/alextheguy1/freelisten`, tag: `latest`.
+3. Storage: map a host path to container path `/music`, and another to
+   `/config`.
+4. Networking: publish container port `5051` to whatever host port you want.
+5. Deploy. Updating later is whatever "check for updates"/"upgrade" action
+   TrueNAS's Apps UI gives that image - same as your other apps.
 
-Or skip the UI and just run `docker compose up -d --build` over SSH the same
-way as any other Docker host - the compose file works either way, it's just
-one service now.
+If you'd rather use `docker compose` over SSH instead of the UI, that works
+too - same commands as Option A above.
+
+### Building it yourself instead
+
+If you'd rather not depend on the published image (or want to test a change
+before it's merged), clone the repo and build locally - `docker compose
+build` uses the same `Dockerfile` the GitHub Action does:
+```bash
+git clone https://github.com/alextheguy1/FreeListen.git
+cd FreeListen
+cp .env.example .env
+docker compose build
+docker compose up -d
+```
 
 ## Option B: Run it directly (no Docker)
 
@@ -232,6 +259,9 @@ files.
 ├── supervisord.conf              # runs backend/ + playlist-backend/ as one container
 ├── docker-compose.yml
 ├── .env.example
+├── .github/
+│   └── workflows/
+│       └── docker-publish.yml   # builds + pushes to ghcr.io on every push
 ├── frontend/
 │   └── index.html              # Search / Activity / Library / Settings UI
 ├── backend/
