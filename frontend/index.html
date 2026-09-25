@@ -815,6 +815,17 @@
     }
   }
 
+  // MusicBrainz's "number" is the release's own label (e.g. "B4" on a vinyl
+  // side), not always a plain integer - only usable for ID3 tagging when
+  // it's purely numeric.
+  function numericTrackNumber(n) {
+    return n != null && /^\d+$/.test(String(n)) ? Number(n) : null;
+  }
+
+  function coverArtUrlFor(releaseId) {
+    return releaseId ? `https://coverartarchive.org/release/${releaseId}/front-500` : null;
+  }
+
   async function downloadTrack(button) {
     const id = button.dataset.dl;
     const rec = current.items.find(i => i.id === id);
@@ -822,7 +833,11 @@
     const release = (rec.releases || [])[0];
     const album = release?.title || null;
     const year = (rec["first-release-date"] || release?.date || "").slice(0, 4) || null;
-    await runDownload(button, { query: lyricsQueryFor(rec.title, artist), title: rec.title, artist, album, year });
+    const trackNumber = numericTrackNumber(release?.media?.[0]?.track?.[0]?.number);
+    const coverArtUrl = coverArtUrlFor(release?.id);
+    await runDownload(button, {
+      query: lyricsQueryFor(rec.title, artist), title: rec.title, artist, album, year, trackNumber, coverArtUrl
+    });
   }
 
   // ---------- Artist "download top N" ----------
@@ -899,17 +914,20 @@
       if (top.length >= n) break;
     }
 
-    // ListenBrainz doesn't return a release year, so look it up per selected
-    // track (only for the final N, to keep this from ballooning into
-    // hundreds of MusicBrainz requests).
+    // ListenBrainz doesn't return a release year or track position, so look
+    // them up per selected track (only for the final N, to keep this from
+    // ballooning into hundreds of MusicBrainz requests). +media adds track
+    // position/cover-art-eligible release id at no extra request cost.
     for (const rec of top) {
       try {
-        const res = await mbFetch(`https://musicbrainz.org/ws/2/recording/${rec.id}?inc=releases&fmt=json`);
+        const res = await mbFetch(`https://musicbrainz.org/ws/2/recording/${rec.id}?inc=releases+media&fmt=json`);
         if (res.ok) {
           const data = await res.json();
           const release = (data.releases || [])[0];
           rec.year = (data["first-release-date"] || release?.date || "").slice(0, 4) || null;
           if (!rec.album && release?.title) rec.album = release.title;
+          rec.trackNumber = numericTrackNumber(release?.media?.[0]?.tracks?.[0]?.position);
+          rec.coverArtUrl = coverArtUrlFor(release?.id);
         }
       } catch (e) { console.warn(e); }
     }
@@ -920,7 +938,8 @@
   async function downloadOneTrack(rec, artist) {
     const data = await postDownload({
       query: lyricsQueryFor(rec.title, artist), title: rec.title, artist,
-      album: rec.album, year: rec.year, genre: rec.genre
+      album: rec.album, year: rec.year, genre: rec.genre,
+      trackNumber: rec.trackNumber, coverArtUrl: rec.coverArtUrl
     });
     return { skipped: !!data.skipped };
   }
@@ -1080,7 +1099,8 @@
     const rec = current.items[Number(button.dataset.dlPlaylist)];
     if (!rec) return;
     await runDownload(button, {
-      query: lyricsQueryFor(rec.title, rec.artist), title: rec.title, artist: rec.artist, album: rec.album, year: rec.year
+      query: lyricsQueryFor(rec.title, rec.artist), title: rec.title, artist: rec.artist, album: rec.album, year: rec.year,
+      trackNumber: rec.trackNumber, coverArtUrl: rec.coverArtUrl
     });
   }
 
@@ -1267,7 +1287,7 @@
         <td class="num">${esc(t.year || "")}</td>
         <td class="num">${fmtSize(t.size)}</td>
         <td class="col-action">
-          <button type="button" class="icon-btn" data-delete-file="${esc(t.filename)}" data-delete-title="${esc(t.title)}" title="Delete">${TRASH_ICON}</button>
+          <button type="button" class="icon-btn" data-delete-file="${esc(t.path)}" data-delete-title="${esc(t.title)}" title="Delete">${TRASH_ICON}</button>
         </td>
       </tr>`).join("");
 

@@ -42,7 +42,8 @@ def get_client():
 
 def extract_track(item):
     """Adapts SpotipyFree's per-item shape (spotipy-compatible: {"track": {...}})
-    to the flat {title, artist, album, year} shape the frontend expects."""
+    to the flat {title, artist, album, year, trackNumber, coverArtUrl} shape
+    the frontend expects."""
     track = item.get("track") if isinstance(item, dict) else None
     if not track or not track.get("name"):
         return None
@@ -52,12 +53,19 @@ def extract_track(item):
 
     album = track.get("album") or {}
     release_date = album.get("release_date") or ""
+    track_number = track.get("track_number")
+    # Spotify lists images largest-first; index 1 is usually a ~300px
+    # "medium" size, a reasonable embedded-art size without bloating files.
+    images = album.get("images") or []
+    cover_art_url = (images[1] if len(images) > 1 else images[0])["url"] if images else None
 
     return {
         "title": track["name"],
         "artist": artist,
         "album": album.get("name"),
         "year": release_date[:4] if release_date else None,
+        "trackNumber": track_number if isinstance(track_number, int) else None,
+        "coverArtUrl": cover_art_url,
     }
 
 

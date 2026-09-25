@@ -83,11 +83,13 @@ function sanitizeForFilename(s) {
     .replace(/\s+/g, " ");
 }
 
-// Loose match for "is this already downloaded": same sanitized "title - artist"
-// name, ignoring case and a trailing " (2)"-style suffix from an older save.
+// Loose match for "is this already downloaded": same sanitized filename,
+// ignoring case and a trailing " (2)"-style suffix from an older save.
 function findExistingDownload(dir, baseName) {
   const target = baseName.toLowerCase();
-  for (const entry of fs.readdirSync(dir)) {
+  let entries;
+  try { entries = fs.readdirSync(dir); } catch { return null; } // dir may not exist yet
+  for (const entry of entries) {
     if (!entry.toLowerCase().endsWith(".mp3")) continue;
     const stem = entry.slice(0, -4).toLowerCase().replace(/\s\(\d+\)$/, "");
     if (stem === target) return entry;
@@ -103,6 +105,53 @@ function uniquePath(dir, baseName, ext) {
     n++;
   }
   return candidate;
+}
+
+// Library layout: SAVE_DIR/Artist/Album/NN - Title.mp3, or SAVE_DIR/Artist/Title.mp3
+// for tracks with no known album - the structure Navidrome/Jellyfin/etc. expect,
+// instead of one flat folder.
+function destDirFor(artist, album) {
+  const artistFolder = sanitizeForFilename(artist) || "Unknown Artist";
+  const albumFolder = album ? sanitizeForFilename(album) : "";
+  return albumFolder ? path.join(SAVE_DIR, artistFolder, albumFolder) : path.join(SAVE_DIR, artistFolder);
+}
+
+function buildFilename(title, trackNumber) {
+  const clean = sanitizeForFilename(title) || "track";
+  const n = Number(trackNumber);
+  return Number.isInteger(n) && n > 0 && n < 1000 ? `${String(n).padStart(2, "0")} - ${clean}` : clean;
+}
+
+// A path relative to SAVE_DIR, with forward slashes regardless of host OS -
+// used as the library item's id for the frontend (display + delete).
+function relKey(absPath) {
+  return path.relative(SAVE_DIR, absPath).split(path.sep).join("/");
+}
+
+function walkMp3Files(dir) {
+  let results = [];
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return results; }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) results = results.concat(walkMp3Files(full));
+    else if (entry.isFile() && entry.name.toLowerCase().endsWith(".mp3")) results.push(full);
+  }
+  return results;
+}
+
+// After deleting a track, prune now-empty Album/Artist folders so the
+// library tree doesn't accumulate clutter. Never removes SAVE_DIR itself.
+function cleanupEmptyDirs(dir) {
+  const root = path.resolve(SAVE_DIR);
+  let current = path.resolve(dir);
+  while (current !== root && current.startsWith(root + path.sep)) {
+    let entries;
+    try { entries = fs.readdirSync(current); } catch { break; }
+    if (entries.length > 0) break;
+    fs.rmdirSync(current);
+    current = path.dirname(current);
+  }
 }
 
 // In-memory activity log (queue + history) for the Activity page. Doesn't
@@ -136,12 +185,13 @@ app.delete("/api/activity", (req, res) => {
 
 app.get("/api/library", (req, res) => {
   try {
-    const files = fs.readdirSync(SAVE_DIR).filter(f => f.toLowerCase().endsWith(".mp3"));
-    const items = files.map(filename => {
-      const filePath = path.join(SAVE_DIR, filename);
+    const files = walkMp3Files(SAVE_DIR);
+    const items = files.map(filePath => {
       const stat = fs.statSync(filePath);
       const tags = NodeID3.read(filePath) || {};
+      const filename = path.basename(filePath);
       return {
+        path: relKey(filePath),
         filename,
         title: tags.title || filename.replace(/\.mp3$/i, ""),
         artist: tags.artist || null,
@@ -160,21 +210,26 @@ app.get("/api/library", (req, res) => {
   }
 });
 
-app.delete("/api/library/:filename", (req, res) => {
-  const filename = req.params.filename;
-  // path.basename strips any directory components, so a filename like
-  // "../../whatever" can't escape SAVE_DIR.
-  const safeName = path.basename(filename);
-  if (!safeName.toLowerCase().endsWith(".mp3")) {
+// :relpath is URL-encoded by the frontend (encodeURIComponent turns each "/"
+// into "%2F"), so Express's normal param decoding hands it back here as the
+// full "Artist/Album/Title.mp3" relative path in one piece.
+app.delete("/api/library/:relpath", (req, res) => {
+  const filePath = path.join(SAVE_DIR, req.params.relpath);
+  const resolved = path.resolve(filePath);
+  const root = path.resolve(SAVE_DIR);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+    return res.status(400).json({ error: "Invalid path" });
+  }
+  if (!resolved.toLowerCase().endsWith(".mp3")) {
     return res.status(400).json({ error: "Not a valid library file" });
   }
-  const filePath = path.join(SAVE_DIR, safeName);
-  if (!fs.existsSync(filePath)) {
+  if (!fs.existsSync(resolved)) {
     return res.status(404).json({ error: "File not found" });
   }
   try {
-    fs.unlinkSync(filePath);
-    console.log(`Deleted: ${safeName}`);
+    fs.unlinkSync(resolved);
+    cleanupEmptyDirs(path.dirname(resolved));
+    console.log(`Deleted: ${relKey(resolved)}`);
     res.json({ ok: true });
   } catch (err) {
     console.error("Delete failed:", err.message || err);
@@ -209,7 +264,7 @@ async function fetchPlaylistViaOfficialApi(playlistId) {
 
   const tracks = [];
   let next = `https://api.spotify.com/v1/playlists/${playlistId}/tracks`
-    + `?limit=100&fields=next,items(track(name,artists(name),album(name,release_date)))`;
+    + `?limit=100&fields=next,items(track(name,track_number,artists(name),album(name,release_date,images)))`;
   while (next && tracks.length < MAX_PLAYLIST_TRACKS) {
     const pageRes = await fetch(next, { headers });
     if (!pageRes.ok) throw new Error(`Spotify error (${pageRes.status})`);
@@ -217,11 +272,16 @@ async function fetchPlaylistViaOfficialApi(playlistId) {
     for (const item of page.items || []) {
       const t = item.track;
       if (!t || !t.name) continue;
+      // Spotify lists images largest-first; index 1 is usually a ~300px
+      // "medium" size, a reasonable embedded-art size without bloating files.
+      const images = t.album?.images || [];
       tracks.push({
         title: t.name,
         artist: (t.artists || []).map(a => a.name).join(", "),
         album: t.album?.name || null,
         year: (t.album?.release_date || "").slice(0, 4) || null,
+        trackNumber: Number.isInteger(t.track_number) ? t.track_number : null,
+        coverArtUrl: images[1]?.url || images[0]?.url || null,
       });
     }
     next = page.next;
@@ -286,7 +346,7 @@ app.get("/api/playlist", async (req, res) => {
 });
 
 app.post("/api/download", async (req, res) => {
-  const { query, title, artist, album, year, genre } = req.body || {};
+  const { query, title, artist, album, year, genre, trackNumber, coverArtUrl } = req.body || {};
   if (typeof query !== "string" || !query.trim()) {
     return res.status(400).json({ error: "query is required" });
   }
@@ -298,15 +358,18 @@ app.post("/api/download", async (req, res) => {
   if (typeof album === "string" && album.trim()) tags.album = album.trim();
   if (typeof year === "string" && /^\d{4}$/.test(year)) tags.year = year;
   if (typeof genre === "string" && genre.trim()) tags.genre = genre.trim();
+  const trackNum = Number(trackNumber);
+  if (Number.isInteger(trackNum) && trackNum > 0 && trackNum < 1000) tags.trackNumber = String(trackNum);
 
-  const baseName = sanitizeForFilename(`${title} - ${artist}`) || query;
+  const destDir = destDirFor(artist, tags.album);
+  const baseName = buildFilename(title, trackNumber);
   const activityRecord = addActivity({ title, artist, album: tags.album || null });
 
-  const existing = findExistingDownload(SAVE_DIR, baseName);
+  const existing = findExistingDownload(destDir, baseName);
   if (existing) {
     console.log(`Skipped (already have it): ${existing}`);
     finishActivity(activityRecord, "skipped", { filename: existing });
-    return res.json({ ok: true, skipped: true, filename: existing, path: path.join(SAVE_DIR, existing) });
+    return res.json({ ok: true, skipped: true, filename: existing, path: path.join(destDir, existing) });
   }
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ytdl-"));
@@ -332,16 +395,41 @@ app.post("/api/download", async (req, res) => {
     if (!produced) throw new Error("Conversion did not produce an mp3 file");
     const mp3Path = path.join(tmpDir, produced);
 
-    const tagged = NodeID3.write(tags, mp3Path);
+    // Best-effort: a missing/unreachable cover shouldn't fail the download.
+    if (typeof coverArtUrl === "string" && coverArtUrl.trim()) {
+      try {
+        const imgRes = await fetch(coverArtUrl);
+        if (imgRes.ok) {
+          tags.image = {
+            mime: imgRes.headers.get("content-type") || "image/jpeg",
+            type: { id: 3, name: "front cover" },
+            description: "",
+            imageBuffer: Buffer.from(await imgRes.arrayBuffer()),
+          };
+        }
+      } catch (e) {
+        console.warn(`Cover art fetch failed for "${title}":`, e.message || e);
+      }
+    }
+
+    let tagged = NodeID3.write(tags, mp3Path);
+    if (tagged !== true && tags.image) {
+      // Don't let a malformed/unexpected image response take the whole
+      // download down - retry with just the text tags.
+      console.warn(`Tag write with cover art failed for "${title}", retrying without it`);
+      delete tags.image;
+      tagged = NodeID3.write(tags, mp3Path);
+    }
     if (tagged !== true) throw new Error("Writing ID3 tags failed");
 
     // Re-check right before writing in case a concurrent request just saved
     // the same track while this one was downloading.
-    const stillMissing = !findExistingDownload(SAVE_DIR, baseName);
-    const destPath = stillMissing ? path.join(SAVE_DIR, `${baseName}.mp3`) : uniquePath(SAVE_DIR, baseName, ".mp3");
+    fs.mkdirSync(destDir, { recursive: true });
+    const stillMissing = !findExistingDownload(destDir, baseName);
+    const destPath = stillMissing ? path.join(destDir, `${baseName}.mp3`) : uniquePath(destDir, baseName, ".mp3");
     fs.copyFileSync(mp3Path, destPath);
 
-    console.log(`Saved: ${path.basename(destPath)}`);
+    console.log(`Saved: ${relKey(destPath)}`);
     finishActivity(activityRecord, "completed", { filename: path.basename(destPath) });
     res.json({ ok: true, skipped: false, filename: path.basename(destPath), path: destPath });
   } catch (err) {

@@ -25,19 +25,24 @@ delete), and **Settings**.
 - Per-song **Download**: finds a lyrics-video version of the track (to avoid
   the sound effects/crowd noise/intros that often come with official music
   videos), downloads it as an MP3, and tags it with title, artist, album,
-  year, and genre where available.
+  year, genre, track number, and embedded cover art where available.
 - Per-artist **Download top N tracks**: downloads an artist's N most popular
   tracks (by real ListenBrainz play count), skipping remaster/live/concert
-  versions and near-duplicate titles. N is adjustable in the UI.
+  versions and near-duplicate titles. N is adjustable in the UI, with no
+  upper limit.
 - Playlist **Download all**: downloads every track in a loaded playlist the
   same way, tagged with the metadata Spotify has for each track.
-- **Activity page**: a live queue and history of every download - what's in
-  progress, what completed, what failed and why.
+- Library layout: saves into `Artist/Album/NN - Title.mp3` (or
+  `Artist/Title.mp3` when no album is known) rather than one flat folder -
+  point Navidrome, Jellyfin, or any other Subsonic/media-server-style app at
+  the same directory and it'll organize correctly.
+- **Activity page**: a live queue of downloads currently in progress.
 - **Library page**: everything currently saved to disk, read back from each
-  file's actual ID3 tags, with a delete button per track.
+  file's actual ID3 tags, with a delete button per track (which also prunes
+  any album/artist folder left empty behind it).
 - Duplicate detection: re-downloading a track you already have is a no-op
-  (matched by sanitized `"<title> - <artist>"` filename), so batch downloads
-  are safe to re-run.
+  (matched by sanitized title within that track's artist/album folder), so
+  batch downloads are safe to re-run.
 - Automatic retry with backoff on the transient failures YouTube downloads
   occasionally hit.
 - Settings page for API keys - nothing is hardcoded in source.
@@ -169,11 +174,13 @@ files.
 - **Activity**: the backend keeps an in-memory log of every download attempt
   (title, artist, status, timing) exposed via `GET /api/activity`. It's
   intentionally not persisted to disk - a restart just starts a fresh log.
-- **Library**: `GET /api/library` reads every `.mp3` in the save directory
-  and its actual ID3 tags back out, so what you see always matches what's
-  really on disk. Deleting (`DELETE /api/library/:filename`) only accepts a
-  bare filename - `path.basename()` strips any directory components, so it
-  can't be tricked into deleting outside the save directory.
+- **Library**: `GET /api/library` walks the save directory (now
+  `Artist/Album/Track.mp3`, not a flat folder) and reads each file's actual
+  ID3 tags back out, so what you see always matches what's really on disk.
+  Deleting (`DELETE /api/library/:relpath`, with the relative path
+  URL-encoded by the frontend) resolves the path and checks it's still
+  inside the save directory before touching anything, so it can't be tricked
+  into deleting outside it - then prunes any album/artist folder left empty.
 
 ## Known limitations
 
@@ -222,7 +229,7 @@ files.
 | GET    | `/api/activity`         | Current queue + history                   |
 | DELETE | `/api/activity`         | Clear finished entries from history        |
 | GET    | `/api/library`          | List everything saved to disk             |
-| DELETE | `/api/library/:filename`| Delete one saved file                     |
+| DELETE | `/api/library/:relpath` | Delete one saved file                     |
 
 ## License
 
