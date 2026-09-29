@@ -31,6 +31,11 @@ delete), and **Settings**.
   global setting applied to every download, not decided for you. Every
   format gets full metadata tags; only Opus can't carry embedded cover art
   (a limitation of the format itself, not this app).
+- Per-album **Download album**: grabs the album's whole track listing in
+  order, numbered and tagged. Albums exist in MusicBrainz as dozens of
+  editions that disagree (reissues add bonus tracks, box sets bundle discs),
+  so it uses the track listing the most official editions agree on rather
+  than whichever edition came back first.
 - Per-artist **Download top N tracks**: downloads an artist's N most popular
   tracks (by real ListenBrainz play count), skipping remaster/live/concert
   versions and near-duplicate titles. N is adjustable in the UI, with no

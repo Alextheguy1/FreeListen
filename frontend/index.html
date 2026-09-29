@@ -912,7 +912,11 @@
     const date = g["first-release-date"] || "";
     const editions = g.count > 1 ? `${g.count} editions` : "";
     const meta = [type, date.slice(0, 4), editions];
-    return row(g, MODES.album.pageUrl(g.id), art, meta);
+    const extra = `
+      <div class="btn-row">
+        <button type="button" class="dl-btn" data-dl-album="${g.id}">${DOWNLOAD_ICON} Download album</button>
+      </div>`;
+    return row(g, MODES.album.pageUrl(g.id), art, meta, extra);
   }
 
   function artistRow(a) {
@@ -1018,6 +1022,18 @@
     return releaseId ? `https://coverartarchive.org/release/${releaseId}/front-500` : null;
   }
 
+  // Prefer the release group's art over a specific release's: an individual
+  // pressing often has none uploaded (the 1975 Italian A Night at the Opera
+  // 404s), while the group endpoint resolves to whichever edition does have
+  // it - and it's the same album cover either way.
+  function coverArtUrlForGroup(releaseGroupId) {
+    return releaseGroupId ? `https://coverartarchive.org/release-group/${releaseGroupId}/front-500` : null;
+  }
+
+  function artUrlForRelease(release) {
+    return coverArtUrlForGroup(release?.["release-group"]?.id) || coverArtUrlFor(release?.id);
+  }
+
   async function downloadTrack(button) {
     const id = button.dataset.dl;
     const rec = current.items.find(i => i.id === id);
@@ -1029,7 +1045,7 @@
     const album = release?.title || null;
     const year = (rec["first-release-date"] || release?.date || "").slice(0, 4) || null;
     const trackNumber = numericTrackNumber(release?.media?.[0]?.track?.[0]?.number);
-    const coverArtUrl = coverArtUrlFor(release?.id);
+    const coverArtUrl = artUrlForRelease(release);
     await runDownload(button, {
       query: lyricsQueryFor(rec.title, artist), title: rec.title, artist, album, year, trackNumber, coverArtUrl
     });
@@ -1115,14 +1131,14 @@
     // position/cover-art-eligible release id at no extra request cost.
     for (const rec of top) {
       try {
-        const res = await mbFetch(`https://musicbrainz.org/ws/2/recording/${rec.id}?inc=releases+media&fmt=json`);
+        const res = await mbFetch(`https://musicbrainz.org/ws/2/recording/${rec.id}?inc=releases+media+release-groups&fmt=json`);
         if (res.ok) {
           const data = await res.json();
-          const release = (data.releases || [])[0];
+          const release = bestRelease(data);
           rec.year = (data["first-release-date"] || release?.date || "").slice(0, 4) || null;
           if (!rec.album && release?.title) rec.album = release.title;
           rec.trackNumber = numericTrackNumber(release?.media?.[0]?.tracks?.[0]?.position);
-          rec.coverArtUrl = coverArtUrlFor(release?.id);
+          rec.coverArtUrl = artUrlForRelease(release);
         }
       } catch (e) { console.warn(e); }
     }
@@ -1160,8 +1176,8 @@
       const res = await mbFetch(`https://musicbrainz.org/ws/2/release/?query=${encodeURIComponent(q)}&fmt=json&limit=1`);
       if (res.ok) {
         const data = await res.json();
-        const releaseId = data.releases?.[0]?.id;
-        if (releaseId) rec.coverArtUrl = coverArtUrlFor(releaseId);
+        const release = data.releases?.[0];
+        if (release) rec.coverArtUrl = artUrlForRelease(release);
       }
     } catch (err) {
       console.warn(`Cover art lookup failed for "${rec.title}":`, err);
@@ -1246,7 +1262,73 @@
     await downloadTracksBulk(button, tracks, () => artist.name);
   }
 
+  // ---------- Album download ----------
+  // A release group is the album as a concept; the actual track list lives on
+  // its individual releases, of which a popular album can have dozens
+  // (A Night at the Opera has 74). They disagree: reissues add bonus tracks,
+  // box sets bundle several discs. Picking the track count that the most
+  // official editions agree on gets the album as it was actually released,
+  // rather than whichever edition happened to come back first.
+  async function fetchAlbumRelease(releaseGroupId) {
+    const res = await mbFetch(`https://musicbrainz.org/ws/2/release?release-group=${releaseGroupId}`
+      + `&inc=recordings+artist-credits&fmt=json&limit=100`);
+    if (!res.ok) throw new Error(`Could not load that album's tracks (${res.status}).`);
+    const data = await res.json();
+    const all = data.releases || [];
+    const official = all.filter(r => r.status === "Official");
+    const pool = official.length ? official : all;
+    if (!pool.length) throw new Error("MusicBrainz has no track listing for that album.");
+
+    const trackCount = r => (r.media || []).reduce((n, m) => n + (m["track-count"] || 0), 0);
+    const tally = new Map();
+    for (const r of pool) tally.set(trackCount(r), (tally.get(trackCount(r)) || 0) + 1);
+    const canonical = [...tally.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0][0];
+
+    return pool
+      .filter(r => trackCount(r) === canonical)
+      .sort((a, b) => String(a.date || "9999").localeCompare(String(b.date || "9999")))[0];
+  }
+
+  async function downloadAlbum(button) {
+    const id = button.dataset.dlAlbum;
+    const group = current.items.find(i => i.id === id);
+    if (!group) return;
+
+    const original = button.innerHTML;
+    button.disabled = true;
+    button.textContent = "Loading tracks…";
+    let tracks;
+    try {
+      const release = await fetchAlbumRelease(id);
+      const year = (group["first-release-date"] || release.date || "").slice(0, 4) || null;
+      const coverArtUrl = coverArtUrlForGroup(id) || coverArtUrlFor(release.id);
+      tracks = (release.media || []).flatMap(m => m.tracks || []).map(t => ({
+        title: t.title,
+        // Per-track credit matters on splits/compilations; fall back to the
+        // album artist for a normal single-artist album.
+        artist: artistName(t["artist-credit"] || release["artist-credit"] || group["artist-credit"]),
+        album: group.title || release.title,
+        year,
+        trackNumber: numericTrackNumber(t.position),
+        coverArtUrl,
+      })).filter(t => t.title);
+      if (!tracks.length) throw new Error("That album has no listed tracks.");
+    } catch (err) {
+      console.error(err);
+      button.innerHTML = original;
+      button.disabled = false;
+      setStatus(err.message || "Could not load that album's tracks.", true);
+      return;
+    }
+    button.innerHTML = original;
+    button.disabled = false;
+    await downloadTracksBulk(button, tracks, t => t.artist);
+  }
+
   list.addEventListener("click", e => {
+    const dlAlbumButton = e.target.closest("[data-dl-album]");
+    if (dlAlbumButton) { downloadAlbum(dlAlbumButton); return; }
+
     const dlArtistButton = e.target.closest("[data-dl-artist]");
     if (dlArtistButton) { downloadArtistTopTracks(dlArtistButton); return; }
 
