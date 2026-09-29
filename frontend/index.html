@@ -648,6 +648,78 @@
     return (credit || []).map(c => c.name + (c.joinphrase || "")).join("") || "Unknown artist";
   }
 
+  // ---------------- Result grouping ----------------
+  // MusicBrainz indexes a song once per release it appeared on, so a single
+  // hit can occupy hundreds of near-identical rows ("Billie Jean" has 989).
+  // Left alone that floods the results - one song fills the whole page and
+  // genuinely different matches never get shown.
+  //
+  // These collapse a result set into one row per distinct song, and pick
+  // which underlying recording represents it. That choice matters beyond
+  // display: the chosen recording's release is what supplies album, year,
+  // track number and cover art on download, so preferring the original
+  // studio release over a random compilation improves the saved file too.
+  function groupingKey(s) {
+    return String(s || "")
+      .toLowerCase()
+      .replace(/[‘’]/g, "'")
+      .replace(/\s*[\(\[][^\)\]]*[\)\]]/g, "")  // drop "(remastered)" etc.
+      .replace(/[^a-z0-9' ]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  // An official standalone album/single/EP release - i.e. not a compilation,
+  // live album, bootleg or soundtrack appearance.
+  function isStudioRelease(rel) {
+    const rg = rel["release-group"] || {};
+    return rel.status === "Official"
+      && (rg["secondary-types"] || []).length === 0
+      && ["Album", "Single", "EP"].includes(rg["primary-type"]);
+  }
+
+  // Best release to take metadata from: a studio one if any, earliest first
+  // (the original issue rather than a later reissue).
+  function bestRelease(rec) {
+    const rels = (rec.releases || []).slice();
+    if (!rels.length) return null;
+    const byDate = (a, b) => String(a.date || "9999").localeCompare(String(b.date || "9999"));
+    const studio = rels.filter(isStudioRelease).sort(byDate);
+    return studio[0] || rels.sort(byDate)[0];
+  }
+
+  function hasStudioRelease(rec) {
+    return (rec.releases || []).some(isStudioRelease);
+  }
+
+  // Collapses recordings into one entry per song. The entry is a real
+  // recording object (so download/links keep working unchanged) with two
+  // extra fields: releaseCount - how many releases the song appears across,
+  // which is a good popularity proxy, since famous songs get reissued and
+  // compiled endlessly - and variantCount, for reference.
+  function groupSongs(recordings) {
+    const groups = new Map();
+    for (const rec of recordings) {
+      const key = `${groupingKey(rec.title)}|${groupingKey(artistName(rec["artist-credit"]))}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(rec);
+    }
+    return [...groups.values()].map(recs => {
+      // Prefer a recording that actually has a studio release to represent
+      // the group, then the one with the most releases behind it.
+      const ranked = recs.slice().sort((a, b) =>
+        (hasStudioRelease(b) - hasStudioRelease(a)) ||
+        ((b.releases || []).length - (a.releases || []).length) ||
+        ((b.score || 0) - (a.score || 0)));
+      const rep = ranked[0];
+      return Object.assign({}, rep, {
+        releaseCount: recs.reduce((n, r) => n + (r.releases || []).length, 0),
+        variantCount: recs.length,
+        score: Math.max(...recs.map(r => r.score || 0)),
+      });
+    });
+  }
+
   // Turns "bohemian rhapsody artist:queen" into a proper Lucene query.
   // "artist:" always comes last (per the hint text), so an unquoted artist
   // name greedily captures to the end of the string - not just the first
@@ -700,6 +772,38 @@
     return mode === "playlist" ? searchPlaylist(raw) : search(raw);
   }
 
+  const PAGE_SIZE = 100;
+
+  // How deep to page. A bare title match can run to hundreds of results
+  // ordered arbitrarily (MusicBrainz scores every exact title match 100), so
+  // the well-known version of a song is often not on the first page at all -
+  // "billie jean" puts Michael Jackson at position 109. Paging deeper is what
+  // makes those findable; each page costs ~1s to MusicBrainz's rate limit, so
+  // searches that already name an artist stay shallow since they're precise.
+  function pagesFor(raw, searchMode) {
+    if (searchMode === "artist") return 1;
+    return /artist:/i.test(raw) ? 2 : 3;
+  }
+
+  async function mbSearchPaged(cfg, query, maxPages, onProgress) {
+    const items = [];
+    let total = 0;
+    for (let page = 0; page < maxPages; page++) {
+      if (page > 0) onProgress?.(items.length);
+      const url = `${cfg.searchUrl}?query=${encodeURIComponent(query)}&fmt=json`
+        + `&limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`;
+      const res = await mbFetch(url);
+      if (res.status === 503) throw new Error("MusicBrainz is rate-limiting requests. Wait a moment and try again.");
+      if (!res.ok) throw new Error(`MusicBrainz returned an error (${res.status}).`);
+      const data = await res.json();
+      const batch = data[cfg.resultsKey] || [];
+      total = data.count || total;
+      items.push(...batch);
+      if (batch.length < PAGE_SIZE || items.length >= total) break;
+    }
+    return { items, total };
+  }
+
   async function search(raw) {
     const searchMode = mode;
     const cfg = MODES[searchMode];
@@ -711,18 +815,28 @@
     list.innerHTML = "";
 
     try {
-      const url = `${cfg.searchUrl}?query=${encodeURIComponent(query)}&fmt=json&limit=50`;
-      const res = await mbFetch(url);
-      if (res.status === 503) throw new Error("MusicBrainz is rate-limiting requests. Wait a moment and try again.");
-      if (!res.ok) throw new Error(`MusicBrainz returned an error (${res.status}).`);
-      const data = await res.json();
-      const items = data[cfg.resultsKey] || [];
+      const { items: raws, total } = await mbSearchPaged(
+        cfg, query, pagesFor(raw, searchMode),
+        found => setStatus(`Searching… (${found} so far)`)
+      );
 
-      setStatus("Ranking by popularity…");
-      const popularityOk = await addPopularity(items, cfg);
+      // Songs get collapsed to one row each; albums and artists are already
+      // one row per thing as MusicBrainz returns them.
+      const items = searchMode === "song" ? groupSongs(raws) : raws;
+
+      // Only artists still need ListenBrainz - songs rank on how many
+      // releases they appear across and albums on how many editions they
+      // have, both of which come free with the search response and beat
+      // ListenBrainz's per-recording counts (which fragment across every
+      // MBID of a song and read as single digits even for famous tracks).
+      let popularityOk = true;
+      if (searchMode === "artist") {
+        setStatus("Ranking by popularity…");
+        popularityOk = await addPopularity(items, cfg);
+      }
 
       if (searchMode !== mode) return; // user switched tabs mid-search
-      current = { items, count: data.count || 0, mode: searchMode, popularityFailed: !popularityOk };
+      current = { items, count: total, mode: searchMode, popularityFailed: !popularityOk };
       render();
     } catch (err) {
       setStatus(err.message || "Something went wrong.", true);
@@ -756,16 +870,26 @@
     }
   }
 
+  // What "popularity" means per mode. Songs and albums both get a usable
+  // signal straight from the search response; only artists depend on
+  // ListenBrainz.
+  function popularityScore(item, forMode) {
+    if (forMode === "song") return item.releaseCount || 0;
+    if (forMode === "album") return item.count || 0;
+    return item.listens || 0;
+  }
+
   function sorted(items) {
     const copy = [...items];
     if (sortEl.value === "popularity") {
-      copy.sort((a, b) => (b.listens || 0) - (a.listens || 0) || (b.score || 0) - (a.score || 0));
+      const m = current.mode;
+      copy.sort((a, b) => popularityScore(b, m) - popularityScore(a, m) || (b.score || 0) - (a.score || 0));
     }
     return copy; // "relevance" keeps MusicBrainz's original order
   }
 
   function songRow(r) {
-    const release = (r.releases || [])[0];
+    const release = bestRelease(r);
     const date = r["first-release-date"] || release?.date || "";
     const art = release
       ? `<img src="https://coverartarchive.org/release/${release.id}/front-250" alt="" loading="lazy"
@@ -898,7 +1022,10 @@
     const id = button.dataset.dl;
     const rec = current.items.find(i => i.id === id);
     const artist = artistName(rec["artist-credit"]);
-    const release = (rec.releases || [])[0];
+    // bestRelease, not releases[0] - the first release MusicBrainz happens to
+    // return is often a compilation, which would tag the file with that
+    // instead of the album the song is actually from.
+    const release = bestRelease(rec);
     const album = release?.title || null;
     const year = (rec["first-release-date"] || release?.date || "").slice(0, 4) || null;
     const trackNumber = numericTrackNumber(release?.media?.[0]?.track?.[0]?.number);
@@ -1141,7 +1268,12 @@
       return;
     }
     const note = popularityFailed ? " (play counts unavailable right now)" : "";
-    setStatus(`Showing ${items.length} of ${count.toLocaleString()} ${cfg.noun}${note}`);
+    // For songs, `count` is MusicBrainz's raw recording matches - far higher
+    // than the number of actual songs, since each is indexed once per
+    // release - so quoting it against the grouped count would just look wrong.
+    setStatus(current.mode === "song"
+      ? `Showing ${items.length} ${cfg.noun}${note}`
+      : `Showing ${items.length} of ${count.toLocaleString()} ${cfg.noun}${note}`);
     const toRow = current.mode === "album" ? albumRow : current.mode === "artist" ? artistRow : songRow;
     list.innerHTML = sorted(items).map(toRow).join("");
   }
