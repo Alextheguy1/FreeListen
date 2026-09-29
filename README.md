@@ -47,8 +47,9 @@ delete), and **Settings**.
   point Navidrome, Jellyfin, or any other Subsonic/media-server-style app at
   the same directory and it'll organize correctly.
 - **Activity page**: a live queue of downloads currently in progress.
-- **Library page**: everything currently saved to disk, read back from each
-  file's actual tags, with a delete button per track (which also prunes any
+- **Library page**: a cover-art grid of what's saved, grouped into albums,
+  with the artwork pulled straight back out of the files. Click an album to
+  see its tracks and delete individually (deleting also prunes any
   album/artist folder left empty behind it).
 - Duplicate detection: re-downloading a track you already have is a no-op
   (matched by sanitized title within that track's artist/album folder), so
@@ -292,6 +293,7 @@ files.
 | GET    | `/api/activity`         | Current queue + history                   |
 | DELETE | `/api/activity`         | Clear finished entries from history        |
 | GET    | `/api/library`          | List everything saved to disk             |
+| GET    | `/api/library/art/:relpath` | Cover art embedded in one saved file |
 | DELETE | `/api/library/:relpath` | Delete one saved file                     |
 
 ## License
