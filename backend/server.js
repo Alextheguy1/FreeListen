@@ -20,8 +20,17 @@ const PORT = process.env.PORT || 5051;
 // use, but sets from MUSIC_DIR when running in Docker - point that at a
 // bind-mounted volume (e.g. a TrueNAS dataset) the same way other self-hosted
 // apps expose a "downloads" or "media" directory setting.
+// mkdir -p, but tolerant of the path already existing as a bind mount:
+// inside Docker, /music and /config are mount points that always exist, and
+// mkdirSync can throw EEXIST on those even with recursive:true (it only
+// no-ops for a plain directory). Nothing to create in that case anyway.
+function ensureDir(dir) {
+  if (fs.existsSync(dir)) return;
+  fs.mkdirSync(dir, { recursive: true });
+}
+
 const SAVE_DIR = process.env.MUSIC_DIR || path.join(os.homedir(), "Downloads", "Music");
-fs.mkdirSync(SAVE_DIR, { recursive: true });
+ensureDir(SAVE_DIR);
 
 // Falls back to the SpotipyFree-based playlist-backend service (no Spotify
 // credentials needed, full playlist) when reachable - set automatically by
@@ -89,9 +98,16 @@ app.post("/api/settings", (req, res) => {
     audioQuality: qualityValid ? rawQuality : DEFAULT_QUALITY[audioFormat],
   };
   spotifyToken = null; // credentials may have changed - drop the cached token
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
-  res.json({ ok: true });
+  try {
+    ensureDir(CONFIG_DIR);
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+    res.json({ ok: true });
+  } catch (err) {
+    // Most likely cause is the /config mount not being writable by the
+    // user the container runs as - surface that instead of a bare 500.
+    console.error("Saving settings failed:", err.message || err);
+    res.status(500).json({ error: `Could not write ${SETTINGS_FILE}: ${err.message || err}` });
+  }
 });
 
 // YouTube now requires running a bit of JS to decrypt some formats' URLs;
@@ -573,7 +589,7 @@ app.post("/api/download", async (req, res) => {
 
     // Re-check right before writing in case a concurrent request just saved
     // the same track while this one was downloading.
-    fs.mkdirSync(destDir, { recursive: true });
+    ensureDir(destDir);
     const stillMissing = !findExistingDownload(destDir, baseName);
     const destPath = stillMissing
       ? path.join(destDir, `${baseName}.${format}`)

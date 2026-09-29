@@ -596,13 +596,16 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error(`Save failed (${res.status})`);
+      const data = await res.json().catch(() => ({}));
+      // The backend says *why* it couldn't save (an unwritable /config mount
+      // being the usual one) - show that rather than guessing at the cause.
+      if (!res.ok) throw new Error(data.error || `Save failed (${res.status})`);
       LISTENBRAINZ_TOKEN = body.listenbrainzToken;
       settingsStatus.textContent = "Saved ✓";
       setTimeout(() => { settingsStatus.textContent = ""; }, 2000);
     } catch (err) {
       console.error(err);
-      settingsStatus.textContent = "Could not save (is the backend running?)";
+      settingsStatus.textContent = err.message || "Could not save - is the backend running?";
     } finally {
       settingsSave.disabled = false;
     }
