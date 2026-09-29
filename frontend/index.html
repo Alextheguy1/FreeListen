@@ -44,6 +44,14 @@
     font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
+  /* A faint wash behind the content so it reads as a surface rather than a
+     flat fill - subtle enough not to fight the cards sitting on top. */
+  .content {
+    background-image:
+      radial-gradient(900px 420px at 12% -8%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 70%),
+      radial-gradient(700px 360px at 100% 0%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 70%);
+    background-repeat: no-repeat;
+  }
   a { color: inherit; }
   .icon { width: 1em; height: 1em; flex: none; }
 
@@ -135,18 +143,23 @@
 
   ul.result-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
   ul.result-list li {
-    display: flex; gap: 14px; align-items: center; padding: 12px; flex-wrap: wrap;
+    display: flex; gap: 16px; align-items: center; padding: 14px; flex-wrap: wrap;
     background: var(--card); border: 1px solid var(--border); border-radius: 12px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.06); transition: box-shadow 0.12s ease, border-color 0.12s ease;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+    transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
   }
-  ul.result-list li:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+  ul.result-list li:hover {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+    box-shadow: 0 8px 22px rgba(0,0,0,0.22); transform: translateY(-2px);
+  }
   .art {
-    width: 64px; height: 64px; flex: none; border-radius: 8px; background: var(--accent-soft);
-    display: grid; place-items: center; color: var(--accent); font-size: 1.5rem; overflow: hidden;
+    width: 76px; height: 76px; flex: none; border-radius: 9px; background: var(--accent-soft);
+    display: grid; place-items: center; color: var(--accent); font-size: 1.7rem; overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.22);
   }
   .art img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .info { min-width: 0; flex: 1; }
-  .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .title { font-weight: 650; font-size: 1.02rem; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .title a { text-decoration: none; }
   .title a:hover { color: var(--accent); text-decoration: underline; }
   .artist { opacity: 0.85; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -224,6 +237,55 @@
     padding: 40px 20px; text-align: center; color: var(--muted); background: var(--card);
     border: 1px dashed var(--border); border-radius: 12px; font-size: 0.9rem;
   }
+
+  /* ---- Library album grid ---- */
+  .album-grid {
+    display: grid; gap: 18px;
+    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  }
+  .album-card {
+    display: flex; flex-direction: column; min-width: 0;
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    overflow: hidden; transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .album-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 10px 24px rgba(0,0,0,0.28); }
+  /* Expanded, the card spans the row and lays out sideways - cover kept at a
+     fixed size, since a full-width square would be enormous. */
+  .album-card.open {
+    grid-column: 1 / -1;
+    display: grid; grid-template-columns: 148px minmax(0, 1fr); grid-template-rows: auto 1fr;
+  }
+  .album-card.open .album-cover { grid-row: 1 / 3; width: 148px; height: 148px; aspect-ratio: auto; }
+  .album-card.open .album-info { grid-column: 2; }
+  .album-card.open .album-tracks { grid-column: 2; border-top: 0; max-height: 240px; }
+  .album-cover {
+    position: relative; display: block; width: 100%; aspect-ratio: 1; padding: 0; border: 0;
+    background: var(--accent-soft); cursor: pointer; border-radius: 0; box-shadow: none; overflow: hidden;
+  }
+  .album-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .album-cover-fallback {
+    width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+    font-size: 2.4rem; color: var(--accent); opacity: 0.55;
+  }
+  .album-count {
+    position: absolute; right: 8px; bottom: 8px; padding: 2px 8px; border-radius: 20px;
+    background: rgba(0,0,0,0.66); color: #fff; font-size: 0.72rem; font-weight: 700;
+    backdrop-filter: blur(2px);
+  }
+  .album-info { padding: 10px 12px 12px; min-width: 0; }
+  .album-title { font-weight: 650; font-size: 0.92rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .album-artist { color: var(--muted); font-size: 0.84rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .album-sub { color: var(--muted); font-size: 0.74rem; margin-top: 3px; opacity: 0.8; }
+  .album-tracks {
+    list-style: none; margin: 0; padding: 4px 8px 8px; border-top: 1px solid var(--border);
+    max-height: 320px; overflow-y: auto;
+  }
+  .album-track {
+    display: flex; align-items: center; gap: 10px; padding: 5px 6px; border-radius: 7px; font-size: 0.85rem;
+  }
+  .album-track:hover { background: var(--accent-soft); }
+  .album-track-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .album-track-size { color: var(--muted); font-size: 0.76rem; white-space: nowrap; }
   .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; gap: 12px; flex-wrap: wrap; }
   .toolbar-btn {
     display: inline-flex; align-items: center; gap: 7px;
@@ -692,6 +754,12 @@
     return (rec.releases || []).some(isStudioRelease);
   }
 
+  // Earliest date attached to a recording, as a sortable string.
+  function recordingDate(rec) {
+    const dates = [rec["first-release-date"], ...(rec.releases || []).map(r => r.date)].filter(Boolean);
+    return dates.sort()[0] || "9999";
+  }
+
   // Collapses recordings into one entry per song. The entry is a real
   // recording object (so download/links keep working unchanged) with two
   // extra fields: releaseCount - how many releases the song appears across,
@@ -705,10 +773,14 @@
       groups.get(key).push(rec);
     }
     return [...groups.values()].map(recs => {
-      // Prefer a recording that actually has a studio release to represent
-      // the group, then the one with the most releases behind it.
+      // Pick the recording to represent the group: one with a studio
+      // release, and of those the oldest - that's the original, rather than
+      // a re-recording or a version that only exists on a later reissue.
+      // Without the date check a 2012 anniversary edition can win on release
+      // count alone and tag the file with the wrong album entirely.
       const ranked = recs.slice().sort((a, b) =>
         (hasStudioRelease(b) - hasStudioRelease(a)) ||
+        recordingDate(a).localeCompare(recordingDate(b)) ||
         ((b.releases || []).length - (a.releases || []).length) ||
         ((b.score || 0) - (a.score || 0)));
       const rep = ranked[0];
@@ -1610,24 +1682,62 @@
         ${statCard(DISK_ICON, (totalBytes / (1024 * 1024 * 1024)).toFixed(2) + " GB", "On disk")}
       </div>`;
 
-    const rows = items.map(t => `
-      <tr>
-        <td>${esc(t.title)}</td>
-        <td>${esc(t.artist || "")}</td>
-        <td>${esc(t.album || "")}</td>
-        <td class="num">${esc(t.year || "")}</td>
-        <td class="num">${fmtSize(t.size)}</td>
-        <td class="col-action">
-          <button type="button" class="icon-btn" data-delete-file="${esc(t.path)}" data-delete-title="${esc(t.title)}" title="Delete">${TRASH_ICON}</button>
-        </td>
-      </tr>`).join("");
+    // Grouped into albums rather than listed as loose tracks - the artwork
+    // is the point of a music library, and one tile per track would repeat
+    // the same cover a dozen times per album.
+    const albums = new Map();
+    for (const t of items) {
+      const key = `${t.artist || "Unknown artist"}|${t.album || ""}`;
+      if (!albums.has(key)) {
+        albums.set(key, {
+          artist: t.artist || "Unknown artist",
+          album: t.album || "Singles",
+          year: t.year || "",
+          tracks: [],
+          bytes: 0,
+          newest: 0,
+        });
+      }
+      const a = albums.get(key);
+      a.tracks.push(t);
+      a.bytes += t.size || 0;
+      a.newest = Math.max(a.newest, t.modified || 0);
+      if (!a.year && t.year) a.year = t.year;
+    }
 
-    libraryContainer.innerHTML = `
-      ${stats}
-      <table class="data-table">
-        <thead><tr><th>Title</th><th>Artist</th><th>Album</th><th>Year</th><th>Size</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>`;
+    const cards = [...albums.values()]
+      .sort((a, b) => b.newest - a.newest)
+      .map((a, i) => {
+        // Art comes from the first track that has any; the backend 404s for
+        // files without an embedded picture and onerror falls back to the
+        // placeholder.
+        const artSrc = `${BACKEND}/api/library/art/${encodeURIComponent(a.tracks[0].path)}`;
+        a.tracks.sort((x, y) => String(x.filename).localeCompare(String(y.filename), undefined, { numeric: true }));
+        const trackRows = a.tracks.map(t => `
+          <li class="album-track">
+            <span class="album-track-title">${esc(t.title)}</span>
+            <span class="album-track-size">${fmtSize(t.size)}</span>
+            <button type="button" class="icon-btn" data-delete-file="${esc(t.path)}"
+                    data-delete-title="${esc(t.title)}" title="Delete">${TRASH_ICON}</button>
+          </li>`).join("");
+        const sub = [a.year, `${a.tracks.length} track${a.tracks.length === 1 ? "" : "s"}`, fmtSize(a.bytes)]
+          .filter(Boolean).join(" · ");
+        return `
+          <div class="album-card" data-album-index="${i}">
+            <button type="button" class="album-cover" data-album-toggle="${i}" aria-expanded="false">
+              <img src="${artSrc}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'album-cover-fallback',textContent:'♪'}))">
+              <span class="album-count">${a.tracks.length}</span>
+            </button>
+            <div class="album-info">
+              <div class="album-title" title="${esc(a.album)}">${esc(a.album)}</div>
+              <div class="album-artist" title="${esc(a.artist)}">${esc(a.artist)}</div>
+              <div class="album-sub">${esc(sub)}</div>
+            </div>
+            <ul class="album-tracks" hidden>${trackRows}</ul>
+          </div>`;
+      }).join("");
+
+    libraryContainer.innerHTML = `${stats}<div class="album-grid">${cards}</div>`;
   }
 
   async function deleteLibraryItem(button) {
@@ -1649,7 +1759,17 @@
 
   libraryContainer.addEventListener("click", e => {
     const delBtn = e.target.closest("[data-delete-file]");
-    if (delBtn) deleteLibraryItem(delBtn);
+    if (delBtn) { deleteLibraryItem(delBtn); return; }
+
+    const toggle = e.target.closest("[data-album-toggle]");
+    if (toggle) {
+      const card = toggle.closest(".album-card");
+      const tracks = card.querySelector(".album-tracks");
+      const open = tracks.hidden;
+      tracks.hidden = !open;
+      card.classList.toggle("open", open);
+      toggle.setAttribute("aria-expanded", String(open));
+    }
   });
 
   refreshLibraryBtn.addEventListener("click", refreshLibrary);

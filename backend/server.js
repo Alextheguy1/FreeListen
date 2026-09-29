@@ -201,10 +201,23 @@ function probeMetadata(filePath) {
   });
 }
 
+// Pulls the cover image back out of a file so the Library page can show real
+// artwork. -c copy, so this just lifts the stored JPEG/PNG out rather than
+// re-encoding it. Files with no embedded picture make ffmpeg exit non-zero,
+// which is a normal outcome here, not an error worth logging.
+function extractCoverArt(filePath) {
+  return new Promise(resolve => {
+    execFile(ffmpegPath, ["-i", filePath, "-an", "-c:v", "copy", "-f", "image2", "pipe:1"],
+      { maxBuffer: 1024 * 1024 * 20, encoding: "buffer" },
+      (err, stdout) => resolve(!err && stdout?.length ? stdout : null));
+  });
+}
+
 // Spawning ffmpeg per file makes a from-scratch library scan slow on a large
 // collection, so results are cached by path+mtime - a re-scan after the
 // first only re-probes files that actually changed.
 const tagCache = new Map(); // absPath -> { mtimeMs, tags }
+const artCache = new Map(); // absPath -> { mtimeMs, buf } (buf null = no art)
 async function readAudioTags(filePath, mtimeMs) {
   const cached = tagCache.get(filePath);
   if (cached && cached.mtimeMs === mtimeMs) return cached.tags;
@@ -365,17 +378,46 @@ app.get("/api/library", async (req, res) => {
   }
 });
 
+// Resolves a client-supplied relative path to a real library file, or null
+// if it escapes the save directory or isn't an audio file. Every route
+// taking a path from the frontend goes through this.
+function resolveLibraryPath(relpath) {
+  const resolved = path.resolve(path.join(SAVE_DIR, relpath || ""));
+  const root = path.resolve(SAVE_DIR);
+  if (resolved === root || !resolved.startsWith(root + path.sep)) return null;
+  if (!AUDIO_EXT_RE.test(resolved)) return null;
+  return resolved;
+}
+
+// Cover art for one library file, for the Library page's grid. Cached by
+// path+mtime so scrolling a large library doesn't spawn an ffmpeg per tile
+// on every load.
+app.get("/api/library/art/:relpath", async (req, res) => {
+  const resolved = resolveLibraryPath(req.params.relpath);
+  if (!resolved || !fs.existsSync(resolved)) return res.status(404).end();
+  try {
+    const { mtimeMs } = fs.statSync(resolved);
+    let hit = artCache.get(resolved);
+    if (!hit || hit.mtimeMs !== mtimeMs) {
+      hit = { mtimeMs, buf: await extractCoverArt(resolved) };
+      artCache.set(resolved, hit);
+    }
+    if (!hit.buf) return res.status(404).end();
+    res.set("Content-Type", "image/jpeg");
+    res.set("Cache-Control", "private, max-age=86400");
+    res.send(hit.buf);
+  } catch (err) {
+    console.error("Cover art read failed:", err.message || err);
+    res.status(404).end();
+  }
+});
+
 // :relpath is URL-encoded by the frontend (encodeURIComponent turns each "/"
 // into "%2F"), so Express's normal param decoding hands it back here as the
 // full "Artist/Album/Title.mp3" relative path in one piece.
 app.delete("/api/library/:relpath", (req, res) => {
-  const filePath = path.join(SAVE_DIR, req.params.relpath);
-  const resolved = path.resolve(filePath);
-  const root = path.resolve(SAVE_DIR);
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
-    return res.status(400).json({ error: "Invalid path" });
-  }
-  if (!AUDIO_EXT_RE.test(resolved)) {
+  const resolved = resolveLibraryPath(req.params.relpath);
+  if (!resolved) {
     return res.status(400).json({ error: "Not a valid library file" });
   }
   if (!fs.existsSync(resolved)) {
@@ -384,6 +426,7 @@ app.delete("/api/library/:relpath", (req, res) => {
   try {
     fs.unlinkSync(resolved);
     tagCache.delete(resolved);
+    artCache.delete(resolved);
     cleanupEmptyDirs(path.dirname(resolved));
     console.log(`Deleted: ${relKey(resolved)}`);
     res.json({ ok: true });
