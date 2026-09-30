@@ -265,16 +265,6 @@ function findExistingDownload(dir, baseName) {
   return null;
 }
 
-function uniquePath(dir, baseName, ext) {
-  let candidate = path.join(dir, `${baseName}${ext}`);
-  let n = 2;
-  while (fs.existsSync(candidate)) {
-    candidate = path.join(dir, `${baseName} (${n})${ext}`);
-    n++;
-  }
-  return candidate;
-}
-
 // Library layout: SAVE_DIR/Artist/Album/NN - Title.mp3, or SAVE_DIR/Artist/Title.mp3
 // for tracks with no known album - the structure Navidrome/Jellyfin/etc. expect,
 // instead of one flat folder.
@@ -580,24 +570,41 @@ let activeJobs = 0;
 // burst of them at YouTube is the fastest way to get throttled.
 const MAX_CONCURRENT_DOWNLOADS = 1;
 
+// Identifies a track by where it would land on disk, so the same song
+// queued twice - a double click, or the same track appearing in both an
+// album and a playlist download - resolves to one entry.
+function jobKey(tags, trackNumber) {
+  return `${destDirFor(tags.artist, tags.album)}|${buildFilename(tags.title, trackNumber)}`.toLowerCase();
+}
+
+// Tracks queued or downloading right now. The on-disk check in
+// attemptDownload can't catch these: nothing has been written yet, so two
+// jobs for the same song both look new and both download it.
+const inFlight = new Map(); // jobKey -> activity record
+
 function enqueueDownload(job) {
+  const key = jobKey(job.tags, job.trackNumber);
+  const already = inFlight.get(key);
+  if (already) return { record: already, duplicate: true };
+
   const record = addActivity({
     title: job.tags.title,
     artist: job.tags.artist,
     album: job.tags.album || null,
   });
-  pending.push({ job, record });
+  inFlight.set(key, record);
+  pending.push({ job, record, key });
   pumpQueue();
-  return record;
+  return { record, duplicate: false };
 }
 
 function pumpQueue() {
   while (activeJobs < MAX_CONCURRENT_DOWNLOADS && pending.length) {
-    const { job, record } = pending.shift();
+    const { job, record, key } = pending.shift();
     activeJobs++;
     runDownloadJob(job, record)
       .catch(err => console.error("Download job crashed:", err))
-      .finally(() => { activeJobs--; pumpQueue(); });
+      .finally(() => { inFlight.delete(key); activeJobs--; pumpQueue(); });
   }
 }
 
@@ -617,8 +624,8 @@ app.post("/api/download", (req, res) => {
   const trackNum = Number(trackNumber);
   if (Number.isInteger(trackNum) && trackNum > 0 && trackNum < 1000) tags.trackNumber = String(trackNum);
 
-  const record = enqueueDownload({ query, tags, trackNumber, coverArtUrl });
-  res.json({ ok: true, queued: true, id: record.id, position: pending.length });
+  const { record, duplicate } = enqueueDownload({ query, tags, trackNumber, coverArtUrl });
+  res.json({ ok: true, queued: !duplicate, duplicate, id: record.id, position: pending.length });
 });
 
 // Retried once on failure: YouTube downloads fail transiently often enough
@@ -697,13 +704,19 @@ async function attemptDownload(job, record) {
     const taggedPath = path.join(tmpDir, `tagged.${format}`);
     await embedMetadata(rawPath, taggedPath, format, tags, coverBuffer);
 
-    // Re-check right before writing in case a concurrent request just saved
-    // the same track while this one was downloading.
+    // Re-check right before writing in case the same track landed while
+    // this one was downloading. It used to save alongside as "Title (2)",
+    // which is how duplicates got into the library - findExistingDownload
+    // matching means it's the same track, so the right move is to drop this
+    // copy rather than keep both.
     ensureDir(destDir);
-    const stillMissing = !findExistingDownload(destDir, baseName);
-    const destPath = stillMissing
-      ? path.join(destDir, `${baseName}.${format}`)
-      : uniquePath(destDir, baseName, `.${format}`);
+    const landedMeanwhile = findExistingDownload(destDir, baseName);
+    if (landedMeanwhile) {
+      console.log(`Skipped (saved by another job while downloading): ${landedMeanwhile}`);
+      finishActivity(record, "skipped", { filename: landedMeanwhile });
+      return;
+    }
+    const destPath = path.join(destDir, `${baseName}.${format}`);
     fs.copyFileSync(taggedPath, destPath);
 
     console.log(`Saved: ${relKey(destPath)}`);
