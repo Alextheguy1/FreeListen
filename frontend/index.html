@@ -521,6 +521,13 @@
             <select id="setAudioQuality"></select>
           </label>
           <p class="field-help" id="opusArtNote" hidden>Opus files can't carry embedded cover art (the format doesn't support it) - they'll still get title/artist/album/track tags.</p>
+          <label>Single track downloads
+            <select id="setSingleFiling">
+              <option value="single">Save as singles - Artist/Title, no album</option>
+              <option value="album">File into album folders - Artist/Album/NN - Title</option>
+            </select>
+          </label>
+          <p class="field-help">Only affects downloading one track at a time. Downloading a whole album always uses album folders. Saving as singles keeps one-off tracks searchable by song name in Navidrome/Jellyfin, instead of nested inside a one-track album.</p>
         </div>
         <div class="settings-group">
           <h2>ListenBrainz</h2>
@@ -675,6 +682,7 @@
   const setSpotifySecret = document.getElementById("setSpotifySecret");
   const setAudioFormat = document.getElementById("setAudioFormat");
   const setAudioQuality = document.getElementById("setAudioQuality");
+  const setSingleFiling = document.getElementById("setSingleFiling");
   const audioQualityField = document.getElementById("audioQualityField");
   const opusArtNote = document.getElementById("opusArtNote");
   const settingsSave = document.getElementById("settingsSave");
@@ -731,6 +739,7 @@
       setSpotifyId.value = data.spotifyClientId || "";
       setSpotifySecret.value = data.spotifyClientSecret || "";
       setAudioFormat.value = data.audioFormat || "mp3";
+      setSingleFiling.value = data.singleFiling || "single";
       renderQualityOptions(setAudioFormat.value, data.audioQuality);
     } catch (err) {
       console.warn("Could not load settings from backend:", err);
@@ -747,6 +756,7 @@
         spotifyClientSecret: setSpotifySecret.value.trim(),
         audioFormat: setAudioFormat.value,
         audioQuality: setAudioQuality.value,
+        singleFiling: setSingleFiling.value,
       };
       const res = await fetch(`${BACKEND}/api/settings`, {
         method: "POST",
@@ -1350,7 +1360,8 @@
     await postDownload({
       query: lyricsQueryFor(rec.title, artist), title: rec.title, artist,
       album: rec.album, year: rec.year, genre: rec.genre,
-      trackNumber: rec.trackNumber, coverArtUrl: rec.coverArtUrl
+      trackNumber: rec.trackNumber, coverArtUrl: rec.coverArtUrl,
+      partOfAlbum: rec.partOfAlbum === true,
     });
   }
 
@@ -1463,6 +1474,9 @@
         year,
         trackNumber: numericTrackNumber(t.position),
         coverArtUrl,
+        // Always filed as an album regardless of the singles setting - this
+        // genuinely is an album download.
+        partOfAlbum: true,
       })).filter(t => t.title);
       if (!tracks.length) throw new Error("That album has no listed tracks.");
     } catch (err) {

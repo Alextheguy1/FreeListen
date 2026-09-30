@@ -58,6 +58,14 @@ const SUPPORTS_EMBEDDED_ART = { mp3: true, flac: true, m4a: true, opus: false };
 // quality setting applies); opus/m4a use an explicit target bitrate.
 const DEFAULT_QUALITY = { mp3: "4", flac: "", opus: "192K", m4a: "192K" };
 
+// How a one-off track download is filed. "single" keeps it as a standalone
+// track (Artist/Title, no album tag) - music servers then list it as a song
+// you can find by name, rather than nesting it inside a one-track album you
+// have to know the name of. "album" files it like an album track, which is
+// what you want if your library is organised strictly by album.
+// Downloading an actual album is unaffected either way.
+const SINGLE_FILING_MODES = ["single", "album"];
+
 function loadSettings() {
   let saved = {};
   try { saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8")); } catch {}
@@ -70,6 +78,8 @@ function loadSettings() {
     audioFormat,
     audioQuality: typeof saved.audioQuality === "string" && saved.audioQuality
       ? saved.audioQuality : (process.env.AUDIO_QUALITY || DEFAULT_QUALITY[audioFormat]),
+    singleFiling: SINGLE_FILING_MODES.includes(saved.singleFiling) ? saved.singleFiling
+      : SINGLE_FILING_MODES.includes(process.env.SINGLE_FILING) ? process.env.SINGLE_FILING : "single",
   };
 }
 
@@ -96,6 +106,7 @@ app.post("/api/settings", (req, res) => {
     listenbrainzToken: clean(body.listenbrainzToken) ?? settings.listenbrainzToken,
     audioFormat,
     audioQuality: qualityValid ? rawQuality : DEFAULT_QUALITY[audioFormat],
+    singleFiling: SINGLE_FILING_MODES.includes(body.singleFiling) ? body.singleFiling : settings.singleFiling,
   };
   spotifyToken = null; // credentials may have changed - drop the cached token
   try {
@@ -609,7 +620,7 @@ function pumpQueue() {
 }
 
 app.post("/api/download", (req, res) => {
-  const { query, title, artist, album, year, genre, trackNumber, coverArtUrl } = req.body || {};
+  const { query, title, artist, album, year, genre, trackNumber, coverArtUrl, partOfAlbum } = req.body || {};
   if (typeof query !== "string" || !query.trim()) {
     return res.status(400).json({ error: "query is required" });
   }
@@ -617,14 +628,25 @@ app.post("/api/download", (req, res) => {
     return res.status(400).json({ error: "title and artist are required" });
   }
 
+  // partOfAlbum is set only by "Download album", which always files as an
+  // album regardless of the setting - the setting governs one-off tracks,
+  // where burying a single song in a one-track album folder is what makes
+  // it awkward to find by name in a music server.
+  const asAlbumTrack = partOfAlbum === true || settings.singleFiling === "album";
+
   const tags = { title, artist };
-  if (typeof album === "string" && album.trim()) tags.album = album.trim();
+  if (asAlbumTrack && typeof album === "string" && album.trim()) tags.album = album.trim();
   if (typeof year === "string" && /^\d{4}$/.test(year)) tags.year = year;
   if (typeof genre === "string" && genre.trim()) tags.genre = genre.trim();
   const trackNum = Number(trackNumber);
-  if (Number.isInteger(trackNum) && trackNum > 0 && trackNum < 1000) tags.trackNumber = String(trackNum);
+  if (asAlbumTrack && Number.isInteger(trackNum) && trackNum > 0 && trackNum < 1000) {
+    tags.trackNumber = String(trackNum);
+  }
 
-  const { record, duplicate } = enqueueDownload({ query, tags, trackNumber, coverArtUrl });
+  const { record, duplicate } = enqueueDownload({
+    query, tags, coverArtUrl,
+    trackNumber: asAlbumTrack ? trackNumber : null,
+  });
   res.json({ ok: true, queued: !duplicate, duplicate, id: record.id, position: pending.length });
 });
 
