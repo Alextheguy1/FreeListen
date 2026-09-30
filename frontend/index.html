@@ -244,6 +244,50 @@
     border: 1px dashed var(--border); border-radius: 12px; font-size: 0.9rem;
   }
 
+  .queued-pill {
+    display: inline-block; padding: 2px 9px; border-radius: 20px;
+    background: var(--accent-soft); color: var(--accent);
+    font-size: 0.74rem; font-weight: 600;
+  }
+
+  /* ---- Toasts ---- */
+  .toast-host {
+    position: fixed; left: 20px; bottom: 20px; z-index: 50;
+    display: flex; flex-direction: column-reverse; gap: 10px;
+    max-width: min(380px, calc(100vw - 40px)); pointer-events: none;
+  }
+  .toast {
+    pointer-events: auto; display: flex; align-items: flex-start; gap: 10px;
+    padding: 11px 12px; border-radius: 11px;
+    background: var(--card); color: var(--text);
+    border: 1px solid var(--border); border-left: 3px solid var(--muted);
+    box-shadow: 0 12px 30px rgba(0,0,0,0.4);
+    animation: toast-in 0.2s ease-out;
+  }
+  .toast-completed { border-left-color: #22c55e; }
+  .toast-skipped { border-left-color: var(--muted); }
+  .toast-failed { border-left-color: var(--status-failed); }
+  .toast-icon { flex: none; display: grid; place-items: center; margin-top: 1px; }
+  .toast-icon .icon { width: 16px; height: 16px; }
+  .toast-completed .toast-icon { color: #22c55e; }
+  .toast-failed .toast-icon { color: var(--status-failed); }
+  .toast-skipped .toast-icon { color: var(--muted); }
+  .toast-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+  .toast-title {
+    font-size: 0.86rem; font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* Failure reasons come from yt-dlp/ffmpeg and can be long - wrap rather
+     than truncate, since the reason is the whole point of the toast. */
+  .toast-detail { font-size: 0.78rem; color: var(--muted); overflow-wrap: anywhere; }
+  .toast-close {
+    flex: none; padding: 0 2px; background: none; border: 0; box-shadow: none;
+    color: var(--muted); font-size: 1.1rem; line-height: 1; cursor: pointer;
+  }
+  .toast-close:hover { color: var(--text); filter: none; }
+  .toast-out { opacity: 0; transform: translateX(-12px); transition: opacity 0.25s ease, transform 0.25s ease; }
+  @keyframes toast-in { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+
   /* Only visible while there are no results - see the markup note. */
   .search-empty { display: none; }
   #results:empty + .search-empty {
@@ -500,6 +544,9 @@
 
   </main>
 </div>
+
+<!-- Bottom-left, outside .app so it stays put regardless of page scroll. -->
+<div id="toasts" class="toast-host" aria-live="polite"></div>
 
 <script>
   const DOWNLOAD_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
@@ -1101,29 +1148,23 @@
   // Shared single-track download: posts the download, retries once after a
   // pause on failure (YouTube downloads occasionally fail transiently - a bad
   // format pick, a momentary throttle), and reflects progress on the button.
+  // Hands the track to the backend queue and returns - the download itself
+  // happens in the background, and its outcome arrives as a toast. Retries
+  // live on the server now, so there's nothing to wait around for here.
   async function runDownload(button, body) {
     const original = button.innerHTML; // innerHTML (not textContent) so the icon survives the restore
     button.disabled = true;
-    button.textContent = "Saving…";
-    refreshActivitySoon();
+    button.textContent = "Queuing…";
     try {
-      let data;
-      try {
-        data = await postDownload(body);
-      } catch (err) {
-        console.warn("Retrying after error:", err);
-        await new Promise(r => setTimeout(r, 3000));
-        data = await postDownload(body);
-      }
-      button.textContent = data.skipped ? "Already saved ✓" : "Saved ✓";
-      setTimeout(() => { button.innerHTML = original; }, 2000);
+      await postDownload(body);
+      button.textContent = "Queued ✓";
     } catch (err) {
       console.error(err);
-      alert("Could not download the track.");
+      showToast("failed", body.title || "Track", err.message || "Could not add to the queue");
       button.innerHTML = original;
     } finally {
-      button.disabled = false;
       refreshActivitySoon();
+      setTimeout(() => { button.innerHTML = original; button.disabled = false; }, 1600);
     }
   }
 
@@ -1302,51 +1343,42 @@
 
   async function downloadOneTrack(rec, artist) {
     await enrichPlaylistTrack(rec);
-    const data = await postDownload({
+    await postDownload({
       query: lyricsQueryFor(rec.title, artist), title: rec.title, artist,
       album: rec.album, year: rec.year, genre: rec.genre,
       trackNumber: rec.trackNumber, coverArtUrl: rec.coverArtUrl
     });
-    return { skipped: !!data.skipped };
   }
 
-  // Shared bulk-download loop, used by both the artist "download top N" and
-  // playlist "download all" buttons: downloads each track via downloadOneTrack
-  // (with a retry-after-pause on failure), paced so requests to YouTube
-  // aren't fired in an uninterrupted burst, and reflects progress on the button.
+  // Shared by the artist "download top N", album and playlist "download all"
+  // buttons. This only queues the tracks - the backend drains the queue one
+  // at a time - so it finishes in about as long as the requests take rather
+  // than holding the button for the length of every download. Playlist
+  // tracks are the exception: they need a ~2-5s metadata lookup each before
+  // they can be queued, which is why there's still per-track progress.
   async function downloadTracksBulk(button, tracks, artistFor) {
     const original = button.innerHTML; // innerHTML so the icon survives the restore
     button.disabled = true;
 
-    let saved = 0;
-    let alreadyHad = 0;
+    let queued = 0;
+    let failed = 0;
     for (let i = 0; i < tracks.length; i++) {
       const rec = tracks[i];
-      const artist = artistFor(rec);
-      button.textContent = `Saving ${i + 1}/${tracks.length}…`;
-      refreshActivitySoon();
+      button.textContent = `Queuing ${i + 1}/${tracks.length}…`;
       try {
-        let result;
-        try {
-          result = await downloadOneTrack(rec, artist);
-        } catch (err) {
-          console.warn(`Retrying "${rec.title}" after error:`, err);
-          await new Promise(r => setTimeout(r, 3000));
-          result = await downloadOneTrack(rec, artist);
-        }
-        if (result.skipped) alreadyHad++; else saved++;
+        await downloadOneTrack(rec, artistFor(rec));
+        queued++;
       } catch (err) {
-        console.warn(`Skipping "${rec.title}":`, err);
+        failed++;
+        console.warn(`Could not queue "${rec.title}":`, err);
       }
-      if (i < tracks.length - 1) await new Promise(r => setTimeout(r, 1200));
     }
 
-    button.textContent = alreadyHad
-      ? `${saved} new, ${alreadyHad} already saved ✓`
-      : `Saved ${saved}/${tracks.length} ✓`;
-    setTimeout(() => { button.innerHTML = original; }, 4000);
-    button.disabled = false;
+    button.textContent = `Queued ${queued} ✓`;
+    if (failed) showToast("failed", `${failed} track${failed === 1 ? "" : "s"} not queued`, "See the browser console for details");
+    else showToast("completed", `Queued ${queued} track${queued === 1 ? "" : "s"}`, "Downloading in the background");
     refreshActivitySoon();
+    setTimeout(() => { button.innerHTML = original; button.disabled = false; }, 2500);
   }
 
   async function downloadArtistTopTracks(button) {
@@ -1607,14 +1639,66 @@
     if (document.getElementById("page-activity").classList.contains("active")) refreshActivity();
   }
 
+  // ---------------- Toasts ----------------
+  // Downloads finish in the background now, possibly while you're on another
+  // page, so completions and failures surface here instead of only being
+  // visible if you happen to be watching the Activity table.
+  const toastHost = document.getElementById("toasts");
+  // Which activity ids have already been announced, so a poll that sees the
+  // same finished item again doesn't re-toast it.
+  const announced = new Set();
+  let seenActivityIds = null;
+
+  function showToast(kind, title, detail) {
+    const el = document.createElement("div");
+    el.className = `toast toast-${kind}`;
+    el.innerHTML = `
+      <span class="toast-icon">${kind === "failed" ? X_ICON : CHECK_ICON}</span>
+      <span class="toast-body">
+        <span class="toast-title">${esc(title)}</span>
+        ${detail ? `<span class="toast-detail">${esc(detail)}</span>` : ""}
+      </span>
+      <button type="button" class="toast-close" aria-label="Dismiss">&times;</button>`;
+    el.querySelector(".toast-close").addEventListener("click", () => el.remove());
+    toastHost.appendChild(el);
+    // Failures stay longer - there's a reason to read.
+    setTimeout(() => {
+      el.classList.add("toast-out");
+      setTimeout(() => el.remove(), 250);
+    }, kind === "failed" ? 9000 : 4500);
+  }
+
+  function announceFinished(items) {
+    // First poll of the session just records what's already there; without
+    // this, opening the page would toast every past download at once.
+    if (seenActivityIds === null) {
+      seenActivityIds = true;
+      for (const a of items) if (a.status !== "queued" && a.status !== "downloading") announced.add(a.id);
+      return;
+    }
+    for (const a of items) {
+      if (a.status === "queued" || a.status === "downloading") continue;
+      if (announced.has(a.id)) continue;
+      announced.add(a.id);
+      const who = [a.artist, a.title].filter(Boolean).join(" - ") || a.title || "Track";
+      if (a.status === "completed") showToast("completed", who, "Downloaded");
+      else if (a.status === "skipped") showToast("skipped", who, "Already in your library");
+      else if (a.status === "failed") showToast("failed", who, a.error || "Download failed");
+    }
+  }
+
   async function updateActiveBadge() {
     try {
       const res = await fetch(`${BACKEND}/api/activity`);
       if (!res.ok) return;
       const data = await res.json();
-      const activeCount = (data.items || []).filter(a => a.status === "downloading").length;
-      activeBadge.hidden = activeCount === 0;
-      activeBadge.textContent = activeCount;
+      const items = data.items || [];
+      // The badge counts everything still outstanding, queued included -
+      // that's the number of things you're waiting on.
+      const outstanding = items.filter(a => a.status === "downloading" || a.status === "queued").length;
+      activeBadge.hidden = outstanding === 0;
+      activeBadge.textContent = outstanding;
+      announceFinished(items);
     } catch {}
   }
 
@@ -1628,34 +1712,38 @@
       activityContainer.innerHTML = `<div class="empty-state">Nothing here yet - downloads you start will show up in this list.</div>`;
       return;
     }
-    const active = items.filter(a => a.status === "downloading");
+    const downloading = items.filter(a => a.status === "downloading");
+    const queued = items.filter(a => a.status === "queued");
     const completed = items.filter(a => a.status === "completed" || a.status === "skipped").length;
     const failed = items.filter(a => a.status === "failed").length;
     activitySummary.textContent = "";
 
     const stats = `
       <div class="stat-row">
-        ${statCard(INBOX_ICON, active.length, "Downloading")}
+        ${statCard(INBOX_ICON, downloading.length + queued.length, "In queue")}
         ${statCard(CHECK_ICON, completed, "Completed")}
         ${statCard(X_ICON, failed, "Failed")}
       </div>`;
 
-    // The table is the live queue, not a history log - only downloads still
-    // in progress are listed. Finished ones just contribute to the stat
-    // counts above until "Clear history" resets them.
-    const rows = active.map(a => `
+    // The queue: what's downloading now, then what's waiting, in the order
+    // it'll be worked through. Finished items drop off here and surface as
+    // toasts instead - they'd otherwise push the actual queue off screen.
+    const inQueue = [...downloading, ...queued.slice().reverse()];
+    const rows = inQueue.map((a, i) => `
       <tr>
+        <td class="num">${a.status === "downloading" ? "" : i}</td>
         <td>${esc(a.title)}</td>
         <td>${esc(a.artist || "")}</td>
         <td>${esc(a.album || "")}</td>
-        <td><div class="progress-track"><div class="progress-fill"></div></div></td>
-        <td class="num">${fmtElapsed(a.startedAt, a.finishedAt)}</td>
-        <td class="num">${fmtTime(a.startedAt)}</td>
+        <td>${a.status === "downloading"
+          ? `<div class="progress-track"><div class="progress-fill"></div></div>`
+          : `<span class="queued-pill">Queued</span>`}</td>
+        <td class="num">${a.status === "downloading" ? fmtElapsed(a.startedAt, a.finishedAt) : ""}</td>
       </tr>`).join("");
 
-    const table = active.length
+    const table = inQueue.length
       ? `<table class="data-table">
-          <thead><tr><th>Title</th><th>Artist</th><th>Album</th><th>Status</th><th>Time</th><th>Started</th></tr></thead>
+          <thead><tr><th>#</th><th>Title</th><th>Artist</th><th>Album</th><th>Status</th><th>Time</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>`
       : `<div class="empty-state">Queue is empty - nothing downloading right now.</div>`;
