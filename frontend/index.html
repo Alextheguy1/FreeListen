@@ -1160,8 +1160,8 @@
     button.disabled = true;
     button.textContent = "Queuing…";
     try {
-      await postDownload(body);
-      button.textContent = "Queued ✓";
+      const data = await postDownload(body);
+      button.textContent = data.duplicate ? "Already queued" : "Queued ✓";
     } catch (err) {
       console.error(err);
       showToast("failed", body.title || "Track", err.message || "Could not add to the queue");
