@@ -330,7 +330,10 @@ let activity = [];
 let nextActivityId = 1;
 
 function addActivity(entry) {
-  const record = { id: nextActivityId++, status: "downloading", startedAt: Date.now(), finishedAt: null, error: null, ...entry };
+  const record = {
+    id: nextActivityId++, status: "queued",
+    queuedAt: Date.now(), startedAt: null, finishedAt: null, error: null, ...entry,
+  };
   activity.unshift(record);
   if (activity.length > MAX_ACTIVITY) activity.length = MAX_ACTIVITY;
   return record;
@@ -343,11 +346,13 @@ function finishActivity(record, status, extra = {}) {
 }
 
 app.get("/api/activity", (req, res) => {
-  res.json({ items: activity });
+  res.json({ items: activity, queued: pending.length, active: activeJobs });
 });
 
 app.delete("/api/activity", (req, res) => {
-  activity = activity.filter(a => a.status === "downloading");
+  // Only clears finished entries - anything still queued or downloading
+  // stays, since dropping those would hide work that's actually happening.
+  activity = activity.filter(a => a.status === "queued" || a.status === "downloading");
   res.json({ ok: true });
 });
 
@@ -563,7 +568,40 @@ app.get("/api/playlist/track/:id", async (req, res) => {
   }
 });
 
-app.post("/api/download", async (req, res) => {
+// ---------------- Download queue ----------------
+// Downloads used to run inside the HTTP request, so the button stayed stuck
+// until the file landed and a 50-track album meant the browser driving 50
+// sequential requests. Requests now just enqueue and return; this drains the
+// queue in the background, which is what makes the Activity page an actual
+// queue you can watch rather than a log of one in-flight item.
+const pending = [];
+let activeJobs = 0;
+// One at a time on purpose: each job runs yt-dlp plus ffmpeg, and firing a
+// burst of them at YouTube is the fastest way to get throttled.
+const MAX_CONCURRENT_DOWNLOADS = 1;
+
+function enqueueDownload(job) {
+  const record = addActivity({
+    title: job.tags.title,
+    artist: job.tags.artist,
+    album: job.tags.album || null,
+  });
+  pending.push({ job, record });
+  pumpQueue();
+  return record;
+}
+
+function pumpQueue() {
+  while (activeJobs < MAX_CONCURRENT_DOWNLOADS && pending.length) {
+    const { job, record } = pending.shift();
+    activeJobs++;
+    runDownloadJob(job, record)
+      .catch(err => console.error("Download job crashed:", err))
+      .finally(() => { activeJobs--; pumpQueue(); });
+  }
+}
+
+app.post("/api/download", (req, res) => {
   const { query, title, artist, album, year, genre, trackNumber, coverArtUrl } = req.body || {};
   if (typeof query !== "string" || !query.trim()) {
     return res.status(400).json({ error: "query is required" });
@@ -579,18 +617,47 @@ app.post("/api/download", async (req, res) => {
   const trackNum = Number(trackNumber);
   if (Number.isInteger(trackNum) && trackNum > 0 && trackNum < 1000) tags.trackNumber = String(trackNum);
 
+  const record = enqueueDownload({ query, tags, trackNumber, coverArtUrl });
+  res.json({ ok: true, queued: true, id: record.id, position: pending.length });
+});
+
+// Retried once on failure: YouTube downloads fail transiently often enough
+// (a bad format pick, a momentary throttle) that one retry converts a
+// meaningful share of failures into successes.
+async function runDownloadJob(job, record) {
+  record.status = "downloading";
+  record.startedAt = Date.now();
+  try {
+    await attemptDownload(job, record);
+  } catch (err) {
+    const message = err.shortMessage || err.message || String(err);
+    console.warn(`Retrying "${job.query}" after: ${message}`);
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      await attemptDownload(job, record);
+    } catch (err2) {
+      const message2 = err2.shortMessage || err2.message || String(err2);
+      console.error(`Failed ("${job.query}"):`, message2);
+      finishActivity(record, "failed", { error: message2 });
+    }
+  }
+}
+
+async function attemptDownload(job, record) {
+  const { query, tags, trackNumber, coverArtUrl } = job;
+  const { title, artist } = tags;
+
   const format = AUDIO_FORMATS.includes(settings.audioFormat) ? settings.audioFormat : "mp3";
   const quality = settings.audioQuality || DEFAULT_QUALITY[format];
 
   const destDir = destDirFor(artist, tags.album);
   const baseName = buildFilename(title, trackNumber);
-  const activityRecord = addActivity({ title, artist, album: tags.album || null });
 
   const existing = findExistingDownload(destDir, baseName);
   if (existing) {
     console.log(`Skipped (already have it): ${existing}`);
-    finishActivity(activityRecord, "skipped", { filename: existing });
-    return res.json({ ok: true, skipped: true, filename: existing, path: path.join(destDir, existing) });
+    finishActivity(record, "skipped", { filename: existing });
+    return;
   }
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ytdl-"));
@@ -640,16 +707,10 @@ app.post("/api/download", async (req, res) => {
     fs.copyFileSync(taggedPath, destPath);
 
     console.log(`Saved: ${relKey(destPath)}`);
-    finishActivity(activityRecord, "completed", { filename: path.basename(destPath) });
-    res.json({ ok: true, skipped: false, filename: path.basename(destPath), path: destPath });
-  } catch (err) {
-    const message = err.shortMessage || err.message || String(err);
-    console.error(`Failed ("${query}"):`, message);
-    finishActivity(activityRecord, "failed", { error: message });
-    if (!res.headersSent) res.status(500).json({ error: "Download failed" });
+    finishActivity(record, "completed", { filename: path.basename(destPath) });
   } finally {
     cleanup();
   }
-});
+}
 
 app.listen(PORT, () => console.log(`Download backend listening on http://localhost:${PORT}`));

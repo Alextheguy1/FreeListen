@@ -46,7 +46,13 @@ delete), and **Settings**.
   `Artist/Title.<ext>` when no album is known) rather than one flat folder -
   point Navidrome, Jellyfin, or any other Subsonic/media-server-style app at
   the same directory and it'll organize correctly.
-- **Activity page**: a live queue of downloads currently in progress.
+- **Activity page**: the live download queue - what's downloading now and
+  everything waiting behind it, in the order it'll be worked through.
+  Pressing download queues a track and returns immediately rather than
+  making you wait, so queuing a 50-track album takes seconds.
+- **Toast notifications**: each download reports back in the bottom-left
+  corner when it finishes - including *why* it failed, since downloads run
+  in the background and you may well be on another page by then.
 - **Library page**: a cover-art grid of what's saved, grouped into albums,
   with the artwork pulled straight back out of the files. Click an album to
   see its tracks and delete individually (deleting also prunes any
@@ -229,9 +235,14 @@ files.
   search uses, once a real album name is known. Either way, each track goes
   through the exact same download pipeline as everything else - same
   query-building, tagging, duplicate detection, and retry logic.
-- **Activity**: the backend keeps an in-memory log of every download attempt
-  (title, artist, status, timing) exposed via `GET /api/activity`. It's
-  intentionally not persisted to disk - a restart just starts a fresh log.
+- **The queue**: `POST /api/download` doesn't download anything itself - it
+  validates, adds the track to an in-memory queue and returns. A worker
+  drains that queue one track at a time (yt-dlp plus ffmpeg is heavy, and
+  firing a burst at YouTube is the quickest way to get throttled), retrying
+  each track once before marking it failed. Progress is exposed through
+  `GET /api/activity`, which the page polls for both the queue table and the
+  toasts. None of it is persisted - a restart drops the queue and starts a
+  fresh log.
 - **Library**: `GET /api/library` walks the save directory (now
   `Artist/Album/Track.<ext>`, not a flat folder) and reads each file's actual
   tags back out via `ffmpeg -i` (cached by path+modification time, so a
@@ -289,9 +300,9 @@ files.
 | POST   | `/api/settings`         | Save API keys                             |
 | GET    | `/api/playlist`         | Resolve a Spotify playlist to a track list |
 | GET    | `/api/playlist/track/:id` | Real album/year for one playlist track  |
-| POST   | `/api/download`         | Download + tag + save one track           |
-| GET    | `/api/activity`         | Current queue + history                   |
-| DELETE | `/api/activity`         | Clear finished entries from history        |
+| POST   | `/api/download`         | Queue one track for download              |
+| GET    | `/api/activity`         | Queue state + recent outcomes             |
+| DELETE | `/api/activity`         | Clear finished entries (keeps the queue)   |
 | GET    | `/api/library`          | List everything saved to disk             |
 | GET    | `/api/library/art/:relpath` | Cover art embedded in one saved file |
 | DELETE | `/api/library/:relpath` | Delete one saved file                     |
