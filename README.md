@@ -42,6 +42,11 @@ delete), and **Settings**.
   upper limit.
 - Playlist **Download all**: downloads every track in a loaded playlist the
   same way, tagged with the metadata Spotify has for each track.
+- Singles vs album tracks: downloading one track saves it as a standalone
+  single (`Artist/Title.<ext>`, no album tag) by default, so music servers
+  list it as a song you can find by name rather than nesting it inside a
+  one-track album. Downloading a whole album always uses album folders.
+  Switchable in Settings if you'd rather everything were filed by album.
 - Library layout: saves into `Artist/Album/NN - Title.<ext>` (or
   `Artist/Title.<ext>` when no album is known) rather than one flat folder -
   point Navidrome, Jellyfin, or any other Subsonic/media-server-style app at
@@ -186,6 +191,9 @@ Open the **Settings** page in the app to configure:
 - **Download quality** - output format (MP3/FLAC/Opus/AAC) and, for the
   lossy ones, encode quality. Applies to every download from then on;
   existing files aren't touched.
+- **Single track downloads** - whether a one-off track is saved as a
+  standalone single or filed into an album folder. Album downloads ignore
+  this and always use album folders.
 - **ListenBrainz token** - makes the artist "Download top N tracks" button
   reliable (ListenBrainz gates that endpoint against scrapers and can
   intermittently reject unauthenticated requests). Get a free one from your
