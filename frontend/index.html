@@ -358,6 +358,7 @@
   .album-track-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .album-track-size { color: var(--muted); font-size: 0.76rem; white-space: nowrap; }
   .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; gap: 12px; flex-wrap: wrap; }
+  .toolbar-actions { display: flex; gap: 8px; margin-left: auto; }
   .toolbar-btn {
     display: inline-flex; align-items: center; gap: 7px;
     padding: 6px 14px; font-size: 0.85rem; font-weight: 600; border-radius: 8px;
@@ -487,7 +488,10 @@
       </div>
       <div class="toolbar">
         <span class="muted-small" id="librarySummary"></span>
-        <button type="button" class="toolbar-btn" id="refreshLibraryBtn">Refresh</button>
+        <div class="toolbar-actions">
+          <button type="button" class="toolbar-btn" id="expandAllBtn" hidden></button>
+          <button type="button" class="toolbar-btn" id="refreshLibraryBtn">Refresh</button>
+        </div>
       </div>
       <div id="libraryContainer"></div>
     </section>
@@ -1775,7 +1779,11 @@
   const libraryContainer = document.getElementById("libraryContainer");
   const librarySummary = document.getElementById("librarySummary");
   const refreshLibraryBtn = document.getElementById("refreshLibraryBtn");
+  const expandAllBtn = document.getElementById("expandAllBtn");
   refreshLibraryBtn.innerHTML = `${REFRESH_ICON} Refresh`;
+
+  const EXPAND_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 13 12 18 17 13"/><polyline points="7 6 12 11 17 6"/></svg>';
+  const COLLAPSE_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg>';
 
   function fmtSize(bytes) {
     if (!bytes) return "";
@@ -1793,6 +1801,7 @@
     } catch (err) {
       librarySummary.textContent = "";
       libraryContainer.innerHTML = `<div class="empty-state">Could not reach the backend to load the library.</div>`;
+      expandAllBtn.hidden = true;
     }
   }
 
@@ -1803,6 +1812,7 @@
     if (!items.length) {
       librarySummary.textContent = "";
       libraryContainer.innerHTML = `<div class="empty-state">No downloads yet - saved tracks will show up here.</div>`;
+      expandAllBtn.hidden = true;
       return;
     }
     const totalBytes = items.reduce((sum, i) => sum + (i.size || 0), 0);
@@ -1870,6 +1880,7 @@
       }).join("");
 
     libraryContainer.innerHTML = `${stats}<div class="album-grid">${cards}</div>`;
+    syncExpandAllBtn();
   }
 
   async function deleteLibraryItem(button) {
@@ -1889,6 +1900,35 @@
     }
   }
 
+  function albumCards() {
+    return [...libraryContainer.querySelectorAll(".album-card")];
+  }
+
+  function setAlbumOpen(card, open) {
+    card.querySelector(".album-tracks").hidden = !open;
+    card.classList.toggle("open", open);
+    card.querySelector("[data-album-toggle]").setAttribute("aria-expanded", String(open));
+  }
+
+  // The button's label is what the next click will do, so it flips to
+  // "Collapse all" only once everything is actually open - including when
+  // you get there by opening the last one by hand.
+  function syncExpandAllBtn() {
+    const cards = albumCards();
+    expandAllBtn.hidden = !cards.length;
+    const allOpen = cards.length > 0 && cards.every(c => c.classList.contains("open"));
+    expandAllBtn.dataset.action = allOpen ? "collapse" : "expand";
+    expandAllBtn.innerHTML = allOpen
+      ? `${COLLAPSE_ICON} Collapse all`
+      : `${EXPAND_ICON} Expand all`;
+  }
+
+  expandAllBtn.addEventListener("click", () => {
+    const open = expandAllBtn.dataset.action === "expand";
+    albumCards().forEach(card => setAlbumOpen(card, open));
+    syncExpandAllBtn();
+  });
+
   libraryContainer.addEventListener("click", e => {
     const delBtn = e.target.closest("[data-delete-file]");
     if (delBtn) { deleteLibraryItem(delBtn); return; }
@@ -1896,11 +1936,8 @@
     const toggle = e.target.closest("[data-album-toggle]");
     if (toggle) {
       const card = toggle.closest(".album-card");
-      const tracks = card.querySelector(".album-tracks");
-      const open = tracks.hidden;
-      tracks.hidden = !open;
-      card.classList.toggle("open", open);
-      toggle.setAttribute("aria-expanded", String(open));
+      setAlbumOpen(card, card.querySelector(".album-tracks").hidden);
+      syncExpandAllBtn();
     }
   });
 
