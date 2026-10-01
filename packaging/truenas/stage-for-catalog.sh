@@ -34,31 +34,45 @@ cp "$HERE/app.yaml" "$HERE/item.yaml" "$HERE/ix_values.yaml" \
 cp "$HERE/templates/docker-compose.yaml" "$DEST/templates/"
 cp "$HERE/templates/test_values/basic-values.yaml" "$DEST/templates/test_values/"
 
-# The shared library is vendored into every app by their tooling rather than
-# written by hand. Copy it from an app already on the same lib_version so the
-# version and its hash in app.yaml stay consistent.
+# The shared library is vendored into every app rather than written by hand,
+# straight from the repo's own library/<version>/ into base_v<version>.
+#
+# It has to be a version their library/hashes.yaml knows about. Most existing
+# apps sit on much older versions because they're frozen at whatever was
+# current when each was last touched - copying from a neighbouring app is how
+# you end up pinned to something their tooling then refuses to update.
 LIB_VERSION="$(grep '^lib_version:' "$HERE/app.yaml" | awk '{print $2}')"
 LIB_DIR="base_v$(echo "$LIB_VERSION" | tr '.' '_')"
-SOURCE_APP=""
-for candidate in navidrome "$APPS_REPO"/ix-dev/community/*; do
-  name="$(basename "$candidate")"
-  if [ -d "$APPS_REPO/ix-dev/community/$name/templates/library/$LIB_DIR" ]; then
-    SOURCE_APP="$name"
-    break
-  fi
-done
+LIB_SRC="$APPS_REPO/library/$LIB_VERSION"
 
-if [ -z "$SOURCE_APP" ]; then
-  echo "error: no app in the checkout vendors library $LIB_DIR" >&2
-  echo "       bump lib_version in app.yaml to one that exists there" >&2
+if [ ! -d "$LIB_SRC" ]; then
+  echo "error: library version $LIB_VERSION not present in $APPS_REPO/library" >&2
+  echo "       available: $(ls "$APPS_REPO/library" | grep -v hashes.yaml | tr '\n' ' ')" >&2
+  echo "       set lib_version in app.yaml to one of those, with its" >&2
+  echo "       matching hash from library/hashes.yaml" >&2
+  exit 1
+fi
+
+if ! grep -q "^$LIB_VERSION:" "$APPS_REPO/library/hashes.yaml"; then
+  echo "error: $LIB_VERSION is not in library/hashes.yaml" >&2
+  exit 1
+fi
+
+EXPECTED_HASH="$(grep "^$LIB_VERSION:" "$APPS_REPO/library/hashes.yaml" | awk '{print $2}')"
+DECLARED_HASH="$(grep '^lib_version_hash:' "$HERE/app.yaml" | awk '{print $2}')"
+if [ "$EXPECTED_HASH" != "$DECLARED_HASH" ]; then
+  echo "error: lib_version_hash in app.yaml does not match library/hashes.yaml" >&2
+  echo "       expected: $EXPECTED_HASH" >&2
+  echo "       declared: $DECLARED_HASH" >&2
   exit 1
 fi
 
 rm -rf "$DEST/templates/library"
-cp -r "$APPS_REPO/ix-dev/community/$SOURCE_APP/templates/library" "$DEST/templates/library"
+mkdir -p "$DEST/templates/library"
+cp -r "$LIB_SRC" "$DEST/templates/library/$LIB_DIR"
 
 echo "staged $APP_NAME into $DEST"
-echo "  library $LIB_DIR copied from $SOURCE_APP"
+echo "  library $LIB_VERSION vendored as $LIB_DIR (hash verified)"
 echo
 echo "next, from $APPS_REPO:"
 echo "  ./.github/scripts/ci.py --app $APP_NAME --train community --test-file basic-values.yaml"
