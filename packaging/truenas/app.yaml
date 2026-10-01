@@ -26,8 +26,7 @@ run_as_context:
   group_name: Host group is [apps]
   uid: 568
   user_name: Host user is [apps]
-screenshots:
-- https://media.sys.truenas.net/apps/freelisten/screenshots/screenshot1.png
+screenshots: []
 sources:
 - https://apps.truenas.com/catalog/freelisten_community/
 - https://github.com/Alextheguy1/FreeListen
