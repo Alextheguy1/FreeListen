@@ -45,8 +45,16 @@ ENV PORT=5051
 ENV MUSIC_DIR=/music
 ENV CONFIG_DIR=/config
 ENV PLAYLIST_BACKEND_URL=http://localhost:5058
+# The image is meant to be run as an unprivileged uid (TrueNAS uses 568) so
+# downloaded files aren't owned by root. That uid won't own /root, so point
+# HOME somewhere world-writable - anything that caches to the home directory
+# would otherwise fail on a permission error that's painful to trace.
+ENV HOME=/tmp
 
 EXPOSE 5051
 VOLUME ["/music"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||5051)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["supervisord", "-n", "-c", "/etc/supervisor/conf.d/freelisten.conf"]

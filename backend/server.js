@@ -86,6 +86,13 @@ function loadSettings() {
 let settings = loadSettings();
 let spotifyToken = null; // { value, expiresAt } - cached Spotify app access token
 
+// Cheap liveness probe for container healthchecks - deliberately touches
+// nothing (no disk, no upstream APIs), so it reports whether the server is
+// up rather than whether MusicBrainz is having a bad day.
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true, queued: pending.length, active: activeJobs });
+});
+
 app.get("/api/settings", (req, res) => {
   res.json(settings);
 });
