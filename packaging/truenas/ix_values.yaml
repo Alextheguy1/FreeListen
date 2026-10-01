@@ -1,7 +1,7 @@
 images:
   image:
     repository: ghcr.io/alextheguy1/freelisten
-    tag: "1.0.1@sha256:92b2e6a24cc82fbec9b5f787b17113c6b58357a3d5d7efab79c49e46f0f995a9"
+    tag: "1.0.2@sha256:244f4ccd5385bd408b3523369e73d5e53c4f1fa9c22bf4f8bedd790e4bc709ff"
   container_utils_image:
     repository: ixsystems/container-utils
     tag: "1.0.2@sha256:46eba20714c1cc6784f60e245c32c33a2d9f616e47d804694a9854248c89a992"
