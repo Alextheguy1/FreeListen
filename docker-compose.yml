@@ -1,23 +1,13 @@
 services:
   freelisten:
-    # Pulls the published image by default (built by GitHub Actions on every
-    # push - see .github/workflows/docker-publish.yml). `build: .` is also
-    # here so `docker compose build` still works for local development
-    # without needing to touch this file.
+    # Pulls the published image by default. `build: .` is kept alongside it so
+    # `docker compose build` works locally without editing this file.
     image: ghcr.io/alextheguy1/freelisten:latest
     build: .
     container_name: freelisten
     ports:
       - "5051:5051"
     volumes:
-      # Left side is the thing you'll actually want to change: point it at
-      # wherever downloads should land (e.g. a TrueNAS dataset path like
-      # /mnt/tank/Music). Right side is fixed - matches MUSIC_DIR in the
-      # Dockerfile.
       - ${MUSIC_DIR_HOST:-./music}:/music
-      # Settings saved through the page's Settings panel (Spotify
-      # credentials, ListenBrainz token, download format/quality) persist
-      # here across restarts/updates instead of being lost when the
-      # container is recreated.
       - ${CONFIG_DIR_HOST:-./config}:/config
     restart: unless-stopped

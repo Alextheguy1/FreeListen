@@ -10,20 +10,12 @@ const ffmpegPath = require("ffmpeg-static");
 const app = express();
 app.use(cors());
 app.use(express.json());
-// Serves frontend/index.html and its assets - so the whole app is just
-// "visit this container's URL", the way other self-hosted apps work.
 app.use(express.static(path.join(__dirname, "..", "frontend")));
 
 const PORT = process.env.PORT || 5051;
 
-// Not hardcoded: defaults to the Windows Downloads folder for local/manual
-// use, but sets from MUSIC_DIR when running in Docker - point that at a
-// bind-mounted volume (e.g. a TrueNAS dataset) the same way other self-hosted
-// apps expose a "downloads" or "media" directory setting.
-// mkdir -p, but tolerant of the path already existing as a bind mount:
-// inside Docker, /music and /config are mount points that always exist, and
-// mkdirSync can throw EEXIST on those even with recursive:true (it only
-// no-ops for a plain directory). Nothing to create in that case anyway.
+// Docker bind mounts already exist, and mkdirSync throws EEXIST on those
+// even with recursive:true.
 function ensureDir(dir) {
   if (fs.existsSync(dir)) return;
   fs.mkdirSync(dir, { recursive: true });
@@ -32,38 +24,24 @@ function ensureDir(dir) {
 const SAVE_DIR = process.env.MUSIC_DIR || path.join(os.homedir(), "Downloads", "Music");
 ensureDir(SAVE_DIR);
 
-// Falls back to the SpotipyFree-based playlist-backend service (no Spotify
-// credentials needed, full playlist) when reachable - set automatically by
-// docker-compose to the sibling container's internal address. If it's not
-// set or not reachable, /api/playlist falls back to the logic below (the
-// public embed page, or the official Web API if Spotify credentials are set).
+// Preferred playlist source: full playlists, no credentials. When unset or
+// unreachable, /api/playlist falls back to the embed page or the Web API.
 const PLAYLIST_BACKEND_URL = process.env.PLAYLIST_BACKEND_URL || "";
 
-// Settings (Spotify credentials, ListenBrainz token) are saved here via the
-// frontend's Settings panel (GET/POST /api/settings) instead of being
-// hardcoded - env vars still work as an initial seed (useful for Docker),
-// but anything saved through the UI takes precedence from then on. In
-// Docker, point CONFIG_DIR at a persistent volume so settings survive
-// container restarts/updates.
+// Env vars seed the settings; anything saved through the UI then wins.
 const CONFIG_DIR = process.env.CONFIG_DIR || __dirname;
 const SETTINGS_FILE = path.join(CONFIG_DIR, "settings.json");
 
-// Formats yt-dlp/ffmpeg can produce, and which of them ffmpeg can embed a
-// cover image into. Ogg/Opus's muxer rejects an attached video stream
-// entirely (confirmed by hand) - Opus downloads still get title/artist/etc
-// tags, just no artwork.
+// Ogg/Opus's muxer rejects an attached video stream, so Opus gets tags but
+// no artwork.
 const AUDIO_FORMATS = ["mp3", "flac", "opus", "m4a"];
 const SUPPORTS_EMBEDDED_ART = { mp3: true, flac: true, m4a: true, opus: false };
-// mp3 uses ffmpeg/LAME's 0(best)-9(worst) VBR scale; flac is lossless (no
-// quality setting applies); opus/m4a use an explicit target bitrate.
+// mp3 is LAME's 0(best)-9(worst) VBR scale; flac is lossless; opus and m4a
+// take a target bitrate.
 const DEFAULT_QUALITY = { mp3: "4", flac: "", opus: "192K", m4a: "192K" };
 
-// How a one-off track download is filed. "single" keeps it as a standalone
-// track (Artist/Title, no album tag) - music servers then list it as a song
-// you can find by name, rather than nesting it inside a one-track album you
-// have to know the name of. "album" files it like an album track, which is
-// what you want if your library is organised strictly by album.
-// Downloading an actual album is unaffected either way.
+// How a one-off download is filed. "single" is Artist/Title with no album
+// tag, so music servers list it by song name. Album downloads ignore this.
 const SINGLE_FILING_MODES = ["single", "album"];
 
 function loadSettings() {
@@ -86,9 +64,8 @@ function loadSettings() {
 let settings = loadSettings();
 let spotifyToken = null; // { value, expiresAt } - cached Spotify app access token
 
-// Cheap liveness probe for container healthchecks - deliberately touches
-// nothing (no disk, no upstream APIs), so it reports whether the server is
-// up rather than whether MusicBrainz is having a bad day.
+// Liveness probe for container healthchecks. Touches no disk and no upstream
+// API, so it reports on this server rather than on MusicBrainz.
 app.get("/api/health", (req, res) => {
   res.json({ ok: true, queued: pending.length, active: activeJobs });
 });
@@ -101,10 +78,8 @@ app.post("/api/settings", (req, res) => {
   const body = req.body || {};
   const clean = v => (typeof v === "string" ? v.trim() : undefined);
   const audioFormat = AUDIO_FORMATS.includes(body.audioFormat) ? body.audioFormat : settings.audioFormat;
-  // Quality is format-specific (VBR level vs bitrate) - a value left over
-  // from switching formats on the frontend wouldn't make sense here, so
-  // anything not shaped like "<digit>" or "<number>K" falls back to that
-  // format's default rather than getting passed straight to ffmpeg.
+  // Quality is format-specific, so a value left over from switching formats
+  // falls back to the new format's default instead of reaching ffmpeg.
   const rawQuality = clean(body.audioQuality);
   const qualityValid = rawQuality != null && (/^[0-9]$/.test(rawQuality) || /^\d+K$/i.test(rawQuality));
   settings = {
@@ -121,16 +96,14 @@ app.post("/api/settings", (req, res) => {
     fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
     res.json({ ok: true });
   } catch (err) {
-    // Most likely cause is the /config mount not being writable by the
-    // user the container runs as - surface that instead of a bare 500.
+    // Usually /config not being writable by the container's uid.
     console.error("Saving settings failed:", err.message || err);
     res.status(500).json({ error: `Could not write ${SETTINGS_FILE}: ${err.message || err}` });
   }
 });
 
-// YouTube now requires running a bit of JS to decrypt some formats' URLs;
-// yt-dlp only supports Deno for that, so a portable copy lives in bin/ and
-// gets added to PATH just for the yt-dlp child process below.
+// yt-dlp needs Deno to decrypt some YouTube format URLs. bin/ holds a
+// portable copy, added to PATH for that child process only.
 const DENO_DIR = path.join(__dirname, "bin");
 const ytDlpEnv = { ...process.env, PATH: `${DENO_DIR}${path.delimiter}${process.env.PATH}` };
 
@@ -143,10 +116,8 @@ function runFfmpeg(args) {
   });
 }
 
-// Embeds tags (and, where the format supports it, cover art) by muxing the
-// already-encoded audio into a new container with -c copy - no re-encoding,
-// so this doesn't touch audio quality. Ogg/Opus's muxer rejects an attached
-// video stream outright, so art is skipped there regardless of canEmbedArt.
+// Muxes the encoded audio into a new container with -c copy, so tagging never
+// re-encodes. Opus skips art regardless of canEmbedArt.
 async function embedMetadata(srcPath, destPath, format, tags, coverBuffer) {
   const canEmbedArt = !!coverBuffer && SUPPORTS_EMBEDDED_ART[format];
   const coverPath = canEmbedArt ? `${srcPath}.cover.jpg` : null;
@@ -175,8 +146,7 @@ async function embedMetadata(srcPath, destPath, format, tags, coverBuffer) {
     try {
       await run(canEmbedArt);
     } catch (err) {
-      // A malformed/unexpected image response shouldn't take the whole
-      // download down - retry with just the text tags.
+      // A bad image response shouldn't fail the download; retry text-only.
       if (!canEmbedArt) throw err;
       console.warn(`Tag embed with cover art failed for "${tags.title}", retrying without it:`, err.message);
       await run(false);
@@ -186,20 +156,15 @@ async function embedMetadata(srcPath, destPath, format, tags, coverBuffer) {
   }
 }
 
-// Reads tags back via `ffmpeg -i` (no output file) rather than ffprobe -
-// ffprobe-static has no Linux ARM64 build, and this app already depends on
-// ffmpeg-static (which does), so this avoids a second, less-portable binary.
-// ffmpeg always "fails" with no output specified, but still prints the full
-// probe (container tags AND per-stream tags, which is where Ogg/Opus keeps
-// them) to stderr first.
+// Uses `ffmpeg -i` rather than ffprobe, because ffprobe-static has no Linux
+// ARM64 build. ffmpeg exits non-zero with no output file, but prints both
+// container and per-stream tags to stderr first; Opus keeps them per-stream.
 function probeMetadata(filePath) {
   return new Promise(resolve => {
     execFile(ffmpegPath, ["-i", filePath], { maxBuffer: 1024 * 1024 * 10 }, (err, stdout, stderr) => {
       const tags = {};
-      // The embedded-art picture is itself a "stream" with its own
-      // title/comment ("Album cover" / "Cover (front)", set when writing) -
-      // skip its metadata block so it can't overwrite the real track tags,
-      // which live at the container level and/or on the audio stream.
+      // The cover art is a stream carrying its own title ("Album cover"), so
+      // skip its metadata block or it overwrites the real track title.
       let inNonAudioStream = false;
       for (const line of (stderr || "").split(/\r?\n/)) {
         if (/^\s+Stream #\d+:\d+.*:\s*Audio:/.test(line)) inNonAudioStream = false;
@@ -219,10 +184,8 @@ function probeMetadata(filePath) {
   });
 }
 
-// Pulls the cover image back out of a file so the Library page can show real
-// artwork. -c copy, so this just lifts the stored JPEG/PNG out rather than
-// re-encoding it. Files with no embedded picture make ffmpeg exit non-zero,
-// which is a normal outcome here, not an error worth logging.
+// Lifts the stored JPEG/PNG out with -c copy. Files with no embedded picture
+// make ffmpeg exit non-zero, which is normal here and not worth logging.
 function extractCoverArt(filePath) {
   return new Promise(resolve => {
     execFile(ffmpegPath, ["-i", filePath, "-an", "-c:v", "copy", "-f", "image2", "pipe:1"],
@@ -231,9 +194,7 @@ function extractCoverArt(filePath) {
   });
 }
 
-// Spawning ffmpeg per file makes a from-scratch library scan slow on a large
-// collection, so results are cached by path+mtime - a re-scan after the
-// first only re-probes files that actually changed.
+// Cached by path and mtime, so a re-scan only re-probes changed files.
 const tagCache = new Map(); // absPath -> { mtimeMs, tags }
 const artCache = new Map(); // absPath -> { mtimeMs, buf } (buf null = no art)
 async function readAudioTags(filePath, mtimeMs) {
@@ -266,10 +227,8 @@ function sanitizeForFilename(s) {
 
 const AUDIO_EXT_RE = new RegExp(`\\.(${AUDIO_FORMATS.join("|")})$`, "i");
 
-// Loose match for "is this already downloaded": same sanitized filename,
-// ignoring case, a trailing " (2)"-style suffix, and file extension - so
-// switching the audio format setting later doesn't cause a redundant
-// second copy of a track you already have in the old format.
+// Matches on sanitized filename, ignoring case, a trailing " (2)" and the
+// extension, so switching audio format doesn't re-download the library.
 function findExistingDownload(dir, baseName) {
   const target = baseName.toLowerCase();
   let entries;
@@ -283,9 +242,8 @@ function findExistingDownload(dir, baseName) {
   return null;
 }
 
-// Library layout: SAVE_DIR/Artist/Album/NN - Title.mp3, or SAVE_DIR/Artist/Title.mp3
-// for tracks with no known album - the structure Navidrome/Jellyfin/etc. expect,
-// instead of one flat folder.
+// SAVE_DIR/Artist/Album/NN - Title.ext, or SAVE_DIR/Artist/Title.ext when no
+// album is known. This is the layout Navidrome and Jellyfin expect.
 function destDirFor(artist, album) {
   const artistFolder = sanitizeForFilename(artist) || "Unknown Artist";
   const albumFolder = album ? sanitizeForFilename(album) : "";
@@ -298,8 +256,8 @@ function buildFilename(title, trackNumber) {
   return Number.isInteger(n) && n > 0 && n < 1000 ? `${String(n).padStart(2, "0")} - ${clean}` : clean;
 }
 
-// A path relative to SAVE_DIR, with forward slashes regardless of host OS -
-// used as the library item's id for the frontend (display + delete).
+// Relative to SAVE_DIR, forward slashes on any host OS. The frontend uses it
+// as the library item's id.
 function relKey(absPath) {
   return path.relative(SAVE_DIR, absPath).split(path.sep).join("/");
 }
@@ -316,8 +274,7 @@ function walkAudioFiles(dir) {
   return results;
 }
 
-// After deleting a track, prune now-empty Album/Artist folders so the
-// library tree doesn't accumulate clutter. Never removes SAVE_DIR itself.
+// Prunes empty Album/Artist folders after a delete. Never removes SAVE_DIR.
 function cleanupEmptyDirs(dir) {
   const root = path.resolve(SAVE_DIR);
   let current = path.resolve(dir);
@@ -330,9 +287,7 @@ function cleanupEmptyDirs(dir) {
   }
 }
 
-// In-memory activity log (queue + history) for the Activity page. Doesn't
-// need to survive a restart, so it's plain memory rather than a file - if
-// the backend restarts, an in-flight batch just starts a fresh log.
+// Queue plus history for the Activity page. A restart starts a fresh log.
 const MAX_ACTIVITY = 300;
 let activity = [];
 let nextActivityId = 1;
@@ -358,8 +313,7 @@ app.get("/api/activity", (req, res) => {
 });
 
 app.delete("/api/activity", (req, res) => {
-  // Only clears finished entries - anything still queued or downloading
-  // stays, since dropping those would hide work that's actually happening.
+  // Finished entries only; dropping queued work would hide it.
   activity = activity.filter(a => a.status === "queued" || a.status === "downloading");
   res.json({ ok: true });
 });
@@ -391,9 +345,8 @@ app.get("/api/library", async (req, res) => {
   }
 });
 
-// Resolves a client-supplied relative path to a real library file, or null
-// if it escapes the save directory or isn't an audio file. Every route
-// taking a path from the frontend goes through this.
+// Resolves a client-supplied relative path, or null if it escapes SAVE_DIR or
+// isn't audio. Every route taking a frontend path goes through this.
 function resolveLibraryPath(relpath) {
   const resolved = path.resolve(path.join(SAVE_DIR, relpath || ""));
   const root = path.resolve(SAVE_DIR);
@@ -402,9 +355,8 @@ function resolveLibraryPath(relpath) {
   return resolved;
 }
 
-// Cover art for one library file, for the Library page's grid. Cached by
-// path+mtime so scrolling a large library doesn't spawn an ffmpeg per tile
-// on every load.
+// Cached by path and mtime, so scrolling the grid doesn't spawn an ffmpeg
+// per tile.
 app.get("/api/library/art/:relpath", async (req, res) => {
   const resolved = resolveLibraryPath(req.params.relpath);
   if (!resolved || !fs.existsSync(resolved)) return res.status(404).end();
@@ -425,9 +377,8 @@ app.get("/api/library/art/:relpath", async (req, res) => {
   }
 });
 
-// :relpath is URL-encoded by the frontend (encodeURIComponent turns each "/"
-// into "%2F"), so Express's normal param decoding hands it back here as the
-// full "Artist/Album/Title.mp3" relative path in one piece.
+// The frontend encodeURIComponent's the path, so Express decodes it back to
+// "Artist/Album/Title.ext" in one piece.
 app.delete("/api/library/:relpath", (req, res) => {
   const resolved = resolveLibraryPath(req.params.relpath);
   if (!resolved) {
@@ -484,8 +435,7 @@ async function fetchPlaylistViaOfficialApi(playlistId) {
     for (const item of page.items || []) {
       const t = item.track;
       if (!t || !t.name) continue;
-      // Spotify lists images largest-first; index 1 is usually a ~300px
-      // "medium" size, a reasonable embedded-art size without bloating files.
+      // Spotify lists images largest-first; index 1 is the 300px medium.
       const images = t.album?.images || [];
       tracks.push({
         title: t.name,
@@ -502,12 +452,8 @@ async function fetchPlaylistViaOfficialApi(playlistId) {
   return { name: meta.name, tracks, truncated: tracks.length >= MAX_PLAYLIST_TRACKS };
 }
 
-// No credentials needed: Spotify's own public embed page (meant for embedding
-// playlist previews on external sites) server-renders the track list into a
-// __NEXT_DATA__ JSON blob. It has no separate pagination call, so this is
-// capped at whatever that page includes (~50 tracks) - good enough for most
-// playlists, with fetchPlaylistViaOfficialApi as the full-pagination option
-// once real credentials are configured.
+// Spotify's public embed page server-renders the track list into a
+// __NEXT_DATA__ blob. It offers no pagination call, so this caps near 50.
 async function fetchPlaylistViaEmbed(playlistId) {
   const res = await fetch(`https://open.spotify.com/embed/playlist/${playlistId}`, {
     headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36" },
@@ -557,12 +503,9 @@ app.get("/api/playlist", async (req, res) => {
   }
 });
 
-// Real album/year for one playlist track, looked up on demand right before
-// it's downloaded - playlist-backend's own listing doesn't carry them (see
-// playlist-backend/app.py), and looking this up for a whole playlist
-// upfront would take minutes (each lookup is ~2-5s). Only meaningful when
-// playlist-backend is configured; the official-API/embed playlist sources
-// already return real album data directly in the listing.
+// playlist-backend's listing carries no album or year, and each lookup takes
+// 2 to 5 seconds, so the frontend asks per track at download time. The embed
+// and official-API sources already return album data in the listing.
 app.get("/api/playlist/track/:id", async (req, res) => {
   if (!PLAYLIST_BACKEND_URL) return res.status(404).json({ error: "Not available" });
   try {
@@ -577,27 +520,20 @@ app.get("/api/playlist/track/:id", async (req, res) => {
 });
 
 // ---------------- Download queue ----------------
-// Downloads used to run inside the HTTP request, so the button stayed stuck
-// until the file landed and a 50-track album meant the browser driving 50
-// sequential requests. Requests now just enqueue and return; this drains the
-// queue in the background, which is what makes the Activity page an actual
-// queue you can watch rather than a log of one in-flight item.
+// Requests enqueue and return; this worker drains the queue in the background.
 const pending = [];
 let activeJobs = 0;
-// One at a time on purpose: each job runs yt-dlp plus ffmpeg, and firing a
-// burst of them at YouTube is the fastest way to get throttled.
+// One at a time: each job runs yt-dlp plus ffmpeg, and a burst gets throttled.
 const MAX_CONCURRENT_DOWNLOADS = 1;
 
-// Identifies a track by where it would land on disk, so the same song
-// queued twice - a double click, or the same track appearing in both an
-// album and a playlist download - resolves to one entry.
+// Identifies a track by where it lands on disk, so the same song queued twice
+// resolves to one entry.
 function jobKey(tags, trackNumber) {
   return `${destDirFor(tags.artist, tags.album)}|${buildFilename(tags.title, trackNumber)}`.toLowerCase();
 }
 
-// Tracks queued or downloading right now. The on-disk check in
-// attemptDownload can't catch these: nothing has been written yet, so two
-// jobs for the same song both look new and both download it.
+// Queued or downloading now. The on-disk check in attemptDownload can't catch
+// these, since nothing is written yet.
 const inFlight = new Map(); // jobKey -> activity record
 
 function enqueueDownload(job) {
@@ -635,10 +571,7 @@ app.post("/api/download", (req, res) => {
     return res.status(400).json({ error: "title and artist are required" });
   }
 
-  // partOfAlbum is set only by "Download album", which always files as an
-  // album regardless of the setting - the setting governs one-off tracks,
-  // where burying a single song in a one-track album folder is what makes
-  // it awkward to find by name in a music server.
+  // "Download album" always files as an album; the setting governs one-offs.
   const asAlbumTrack = partOfAlbum === true || settings.singleFiling === "album";
 
   const tags = { title, artist };
@@ -657,9 +590,7 @@ app.post("/api/download", (req, res) => {
   res.json({ ok: true, queued: !duplicate, duplicate, id: record.id, position: pending.length });
 });
 
-// Retried once on failure: YouTube downloads fail transiently often enough
-// (a bad format pick, a momentary throttle) that one retry converts a
-// meaningful share of failures into successes.
+// Retried once: YouTube downloads fail transiently often enough to warrant it.
 async function runDownloadJob(job, record) {
   record.status = "downloading";
   record.startedAt = Date.now();
@@ -700,8 +631,8 @@ async function attemptDownload(job, record) {
   const cleanup = () => fs.rm(tmpDir, { recursive: true, force: true }, () => {});
 
   try {
-    // No API key/quota involved: yt-dlp's own "ytsearchN:" pseudo-URL scrapes
-    // YouTube's search directly and downloads the top match.
+    // yt-dlp's "ytsearchN:" pseudo-URL searches and downloads the top match,
+    // with no API key or quota.
     const ytDlpOpts = {
       output: path.join(tmpDir, "%(id)s.%(ext)s"),
       extractAudio: true,
@@ -709,9 +640,8 @@ async function attemptDownload(job, record) {
       ffmpegLocation: ffmpegPath,
       noPlaylist: true,
     };
-    // FLAC is lossless - there's no bitrate/VBR knob to set. For the others,
-    // this is either an mp3 "0(best)-9(worst)" VBR level or an explicit
-    // "<N>K" bitrate (opus/m4a) - yt-dlp/ffmpeg tell those apart by shape.
+    // FLAC has no quality knob. The others take an mp3 VBR level or a "<N>K"
+    // bitrate, which ffmpeg tells apart by shape.
     if (format !== "flac" && quality) ytDlpOpts.audioQuality = quality;
     await ytDlp(`ytsearch1:${query}`, ytDlpOpts, { env: ytDlpEnv });
 
@@ -733,11 +663,9 @@ async function attemptDownload(job, record) {
     const taggedPath = path.join(tmpDir, `tagged.${format}`);
     await embedMetadata(rawPath, taggedPath, format, tags, coverBuffer);
 
-    // Re-check right before writing in case the same track landed while
-    // this one was downloading. It used to save alongside as "Title (2)",
-    // which is how duplicates got into the library - findExistingDownload
-    // matching means it's the same track, so the right move is to drop this
-    // copy rather than keep both.
+    // Re-check before writing in case the same track landed mid-download. A
+    // match means it is the same track, so drop this copy rather than saving
+    // a second "Title (2)".
     ensureDir(destDir);
     const landedMeanwhile = findExistingDownload(destDir, baseName);
     if (landedMeanwhile) {

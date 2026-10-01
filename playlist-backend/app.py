@@ -1,22 +1,19 @@
 """
-Separate playlist backend using SpotipyFree (github.com/TzurSoffer/spotipyFree),
-the same no-official-API approach spotDL itself defaults to. This exists
-alongside the Node backend's /api/playlist (embed-page scraping, capped at
-~50 tracks, or the official Web API if Spotify credentials are configured
-there) as a third option: full playlists, no Spotify account or credentials
-needed at all.
+Playlist backend built on SpotipyFree (github.com/TzurSoffer/spotipyFree),
+which reads full playlists with no Spotify account or credentials. The Node
+backend's own /api/playlist is the fallback: embed-page scraping capped near
+50 tracks, or the official Web API when credentials are configured there.
 
-GET /api/playlist response shape matches the Node backend's /api/playlist,
-so the frontend only needs to change which URL it calls - nothing else:
+GET /api/playlist returns the same shape as the Node backend's, so the
+frontend only changes which URL it calls:
     { "name": str, "tracks": [{"id", "title", "artist", "album", "year", "trackNumber"}], "truncated": bool }
-album/year are always null here (SpotipyFree's playlist listing doesn't
-carry them) - GET /api/track/<id> below fills them in for one track at a
-time, on demand.
+album and year are always null, since SpotipyFree's playlist listing does not
+carry them. GET /api/track/<id> below fills them in one track at a time.
 
 Run:
     pip install -r requirements.txt
     python app.py
-Listens on http://localhost:5058 by default (set PORT to change it).
+Listens on http://localhost:5058 unless PORT is set.
 """
 
 import os
@@ -45,13 +42,12 @@ def get_client():
 
 def extract_track(item):
     """Adapts SpotipyFree's per-item shape (spotipy-compatible: {"track": {...}})
-    to the flat {id, title, artist, album, year, trackNumber} shape the
-    frontend expects. playlist_items() doesn't return real album data (its
-    "album" is always {}) - the frontend fills album/year in later via
-    GET /api/track/<id> below, only for tracks it actually downloads, since
-    that lookup is too slow (~2-5s each) to do for a whole playlist upfront.
-    Cover art isn't sourced from Spotify at all - the frontend looks it up
-    on MusicBrainz/Cover Art Archive once it has a real album name."""
+    to the flat {id, title, artist, album, year, trackNumber} the frontend
+    expects. playlist_items() returns an empty "album", so the frontend fills
+    album and year in later via GET /api/track/<id>, only for tracks it
+    downloads; that lookup takes 2 to 5 seconds each, too slow for a whole
+    playlist upfront. Cover art comes from MusicBrainz and the Cover Art
+    Archive once a real album name is known, never from Spotify."""
     track = item.get("track") if isinstance(item, dict) else None
     if not track or not track.get("name"):
         return None
@@ -71,8 +67,8 @@ def extract_track(item):
 
 
 def extract_full_track(t):
-    """Shape returned by sp.track() (a single-track lookup) is different
-    from playlist_items()'s per-item shape, but *does* have real album data."""
+    """sp.track() returns a different shape from playlist_items(), and this
+    one carries real album data."""
     if not t or not t.get("name"):
         return None
     album = t.get("album") or {}
@@ -100,8 +96,7 @@ def get_playlist():
         sp = get_client()
         raw = sp.playlist_items(playlist_id)
 
-        # SpotipyFree mirrors spotipy's response shape: a paging object with
-        # "items", plus "next" when there's another page to follow.
+        # SpotipyFree mirrors spotipy's paging shape.
         items = list(raw.get("items", []))
         next_page = raw.get("next")
         while next_page:
@@ -125,8 +120,8 @@ def get_playlist():
 
 @app.route("/api/track/<track_id>")
 def get_track(track_id):
-    """Real album/year for one track, on demand - only called for tracks
-    that are actually being downloaded, since this lookup takes ~2-5s."""
+    """Real album and year for one track. Called only for tracks being
+    downloaded, since the lookup takes 2 to 5 seconds."""
     try:
         sp = get_client()
         full = extract_full_track(sp.track(track_id))
@@ -140,10 +135,6 @@ def get_track(track_id):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5058))
-    # 0.0.0.0 (not 127.0.0.1) so the Node container can reach this one over
-    # the Docker network; for local (non-Docker) use it's still only reachable
-    # from this machine unless you've explicitly opened the port up.
-    # threaded=True: without it, Flask's dev server handles one request at a
-    # time, so a second person loading a playlist would just hang until the
-    # first one's multi-page Spotify fetch finished.
+    # threaded=True: Flask's dev server is otherwise serial, so a second
+    # playlist load blocks until the first multi-page fetch finishes.
     app.run(host="0.0.0.0", port=port, threaded=True)

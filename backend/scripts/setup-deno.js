@@ -1,6 +1,5 @@
-// YouTube now requires running a bit of JS to decrypt some formats' URLs.
-// yt-dlp only supports Deno for that, so this fetches a portable copy into
-// bin/ automatically on `npm install` - no system-wide install needed.
+// YouTube requires running JS to decrypt some formats' URLs, and yt-dlp only
+// supports Deno for that. This fetches a portable copy into bin/ on install.
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -59,8 +58,7 @@ async function main() {
   if (AdmZip) {
     new AdmZip(zipPath).extractAllTo(BIN_DIR, true);
   } else {
-    // No unzip dependency: shell out to a platform unzip tool instead of
-    // adding another package just for this one-time setup step.
+    // Shell out rather than add a package for one setup step.
     const { execFileSync } = require("child_process");
     if (process.platform === "win32") {
       execFileSync("powershell", [

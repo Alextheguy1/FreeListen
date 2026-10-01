@@ -1,8 +1,5 @@
 name: Build and publish Docker image
 
-# Runs on every push to main - the image at ghcr.io/<owner>/freelisten:latest
-# is always what's on main. Also runs on version tags (v1.0.0 etc.) so a
-# specific release can be pinned instead of just floating on :latest.
 on:
   push:
     branches: [main]
@@ -18,9 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # GHCR (like all registries) requires a lowercase path, but the GitHub
-      # username/repo name aren't guaranteed to be - lowercase it here rather
-      # than assume. github.repository is already "owner/repo".
+      # GHCR requires a lowercase path; github.repository preserves case.
       - run: echo "IMAGE_NAME=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
 
       - uses: docker/setup-qemu-action@v3
