@@ -13,8 +13,13 @@ FROM node:20-slim
 # single-image apps bundle more than one internal service - so this deploys
 # as one Docker app instead of two, while keeping the two backends as
 # separate codebases as before.
+# curl: not used by the app itself - it's what container healthchecks call,
+# including the one TrueNAS's catalog template generates. Debian slim ships
+# with neither curl nor wget, so a healthcheck would otherwise fail and the
+# container would report unhealthy while running perfectly well.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     unzip \
     python3 \
     python3-venv \
