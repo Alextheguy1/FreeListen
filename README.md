@@ -74,8 +74,9 @@ queue and history), **Library** (everything saved to disk, with delete), and
 Two pieces of code, packaged as one Docker image:
 
 - **`frontend/`**: a static page, no build step, no framework. Served by
-  `backend/`, so running the app means visiting one URL. It can also be opened
-  directly as a local file for manual, non-Docker use.
+  `backend/`, so running the app means visiting one URL. Open it through that
+  URL rather than as a `file://` page: the server sends no CORS headers, so a
+  page on another origin cannot call the API.
 - **`backend/`**: a Node/Express server. Resolves a search query to a YouTube
   video with [yt-dlp](https://github.com/yt-dlp/yt-dlp), downloads and converts
   the audio, tags it, and saves it to disk. It also serves the frontend, tracks
@@ -265,8 +266,10 @@ These save to `backend/settings.json`, or the `/config` volume in Docker, via
   Terms of Service, even though yt-dlp itself is a legitimate open-source tool.
   This is intended for personal use.
 - The Activity log is in-memory only and resets on restart.
-- The app has no auth of its own. It is meant for your own local network, not
-  to be exposed to the public internet.
+- The app has no auth of its own, and `GET /api/settings` returns the saved
+  Spotify secret and ListenBrainz token to anyone who can reach the port. Keep
+  it on your own local network, behind a reverse proxy with authentication if
+  you need it reachable from outside.
 
 ## Project layout
 

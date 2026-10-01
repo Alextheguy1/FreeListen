@@ -1,5 +1,4 @@
 const express = require("express");
-const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -8,7 +7,10 @@ const ytDlp = require("yt-dlp-exec");
 const ffmpegPath = require("ffmpeg-static");
 
 const app = express();
-app.use(cors());
+// No CORS middleware on purpose. The frontend is served from this same origin
+// below, and GET /api/settings returns the saved Spotify secret and
+// ListenBrainz token. With Access-Control-Allow-Origin: * and no auth, any
+// page in any tab could read those off a known host and port.
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "..", "frontend")));
 

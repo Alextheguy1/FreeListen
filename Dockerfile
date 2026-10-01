@@ -19,7 +19,16 @@ WORKDIR /app
 
 COPY backend/package.json backend/package-lock.json ./backend/
 COPY backend/scripts/ ./backend/scripts/
-RUN cd backend && npm install --omit=dev
+# yt-dlp, Deno and ffmpeg are all fetched by install scripts that log their
+# failures and still exit 0, so a runner that cannot reach GitHub would
+# otherwise produce a green image that can download nothing. Size-check rather
+# than execute: these run under QEMU on the arm64 build, and a truncated
+# download or an error page saved as the binary is the failure worth catching.
+RUN cd backend && npm install --omit=dev \
+    && for b in node_modules/yt-dlp-exec/bin/yt-dlp bin/deno node_modules/ffmpeg-static/ffmpeg; do \
+         test -x "$b" || { echo "missing binary: $b"; exit 1; }; \
+         test "$(stat -c%s "$b")" -gt 1000000 || { echo "truncated binary: $b"; exit 1; }; \
+       done
 
 COPY backend/ ./backend/
 COPY frontend/ ./frontend/

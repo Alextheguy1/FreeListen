@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
     tags: ["v*.*.*"]
+  # yt-dlp is downloaded at build time and YouTube breaks it every few weeks,
+  # so rebuild weekly to keep :latest current even when no code has changed.
+  schedule:
+    - cron: "17 5 * * 1"
   workflow_dispatch: {}
 
 jobs:

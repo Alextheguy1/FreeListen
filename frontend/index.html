@@ -44,7 +44,7 @@
     -webkit-font-smoothing: antialiased;
   }
   /* A faint wash behind the content so it reads as a surface rather than a
-     flat fill - subtle enough not to fight the cards sitting on top. */
+     flat fill, subtle enough not to fight the cards on top of it. */
   .content {
     background-image:
       radial-gradient(900px 420px at 12% -8%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 70%),
@@ -88,7 +88,7 @@
   }
 
   /* The column is capped for readability but centred in whatever space is
-     left, rather than pinned to the sidebar - on a wide monitor the old
+     left, rather than pinned to the sidebar. On a wide monitor the old
      max-width-with-no-margin left a huge dead area down the right. */
   .content { flex: 1; min-width: 0; padding: 32px 40px 40px; display: flex; flex-direction: column; }
   .page { display: none; }
@@ -276,8 +276,8 @@
     font-size: 0.86rem; font-weight: 600;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  /* Failure reasons come from yt-dlp/ffmpeg and can be long - wrap rather
-     than truncate, since the reason is the whole point of the toast. */
+  /* Failure reasons come from yt-dlp and ffmpeg and can be long. Wrap rather
+     than truncate: the reason is the whole point of the toast. */
   .toast-detail { font-size: 0.78rem; color: var(--muted); overflow-wrap: anywhere; }
   .toast-close {
     flex: none; padding: 0 2px; background: none; border: 0; box-shadow: none;
@@ -287,7 +287,7 @@
   .toast-out { opacity: 0; transform: translateX(-12px); transition: opacity 0.25s ease, transform 0.25s ease; }
   @keyframes toast-in { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
 
-  /* Only visible while there are no results - see the markup note. */
+  /* Only visible while there are no results. See the markup note. */
   .search-empty { display: none; }
   #results:empty + .search-empty {
     display: flex; flex-direction: column; align-items: center; text-align: center;
@@ -319,8 +319,8 @@
     overflow: hidden; transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
   }
   .album-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 10px 24px rgba(0,0,0,0.28); }
-  /* Expanded, the card spans the row and lays out sideways - cover kept at a
-     fixed size, since a full-width square would be enormous. */
+  /* Expanded, the card spans the row and lays out sideways. The cover stays
+     a fixed size, since a full-width square would be enormous. */
   .album-card.open {
     grid-column: 1 / -1;
     display: grid; grid-template-columns: 148px minmax(0, 1fr); grid-template-rows: auto 1fr;
@@ -500,14 +500,14 @@
       <div class="page-header page-header-row">
         <div>
           <h1>Settings</h1>
-          <p>Saved on the backend (settings.json) - none of this is required for basic search/download.</p>
+          <p>Saved on the backend in settings.json. None of this is required to search and download.</p>
         </div>
         <button type="button" class="icon-btn theme-toggle-btn" id="themeToggle"></button>
       </div>
       <div class="settings-form">
         <div class="settings-group">
           <h2>Download quality</h2>
-          <p class="field-help">Applies to every download from here on - existing files aren't affected. Formats are tagged (title/artist/album/art) regardless of which you pick.</p>
+          <p class="field-help">Applies to every download from here on; existing files aren't affected. Every format is tagged with title, artist, album and cover art.</p>
           <label>Audio format
             <select id="setAudioFormat">
               <option value="mp3">MP3</option>
@@ -519,7 +519,7 @@
           <label id="audioQualityField">Audio quality
             <select id="setAudioQuality"></select>
           </label>
-          <p class="field-help" id="opusArtNote" hidden>Opus files can't carry embedded cover art (the format doesn't support it) - they'll still get title/artist/album/track tags.</p>
+          <p class="field-help" id="opusArtNote" hidden>Opus can't carry embedded cover art, which is a limit of the format itself. Those files still get title, artist, album and track tags.</p>
           <label>Single track downloads
             <select id="setSingleFiling">
               <option value="single">Save as singles - Artist/Title, no album</option>
@@ -530,7 +530,7 @@
         </div>
         <div class="settings-group">
           <h2>ListenBrainz</h2>
-          <p class="field-help">Makes the artist "Download top N tracks" button reliable - ListenBrainz gates that endpoint against scrapers and can intermittently reject unauthenticated requests.</p>
+          <p class="field-help">Makes the artist "Download top N tracks" button reliable. ListenBrainz gates that endpoint against scrapers and can reject unauthenticated requests.</p>
           <label>User Token
             <input type="text" id="setListenbrainz" placeholder="from listenbrainz.org/settings/" autocomplete="off">
           </label>
@@ -763,7 +763,7 @@
       setTimeout(() => { settingsStatus.textContent = ""; }, 2000);
     } catch (err) {
       console.error(err);
-      settingsStatus.textContent = err.message || "Could not save - is the backend running?";
+      settingsStatus.textContent = err.message || "Could not save. Is the backend running?";
     } finally {
       settingsSave.disabled = false;
     }
@@ -1229,7 +1229,7 @@
       const hint = LISTENBRAINZ_TOKEN
         ? "it may still be rate-limiting this endpoint, try again shortly"
         : "add a free token on the Settings page";
-      throw new Error(`ListenBrainz error (${retryRes.status}) - ${hint}`);
+      throw new Error(`ListenBrainz error (${retryRes.status}): ${hint}`);
     }
     throw new Error(`ListenBrainz error (${res.status})`);
   }
@@ -1501,7 +1501,7 @@
         return;
       }
       const note = data.truncated
-        ? ` (showing the first ${tracks.length} - add Spotify credentials in Settings for the full playlist)`
+        ? ` (showing the first ${tracks.length}; add Spotify credentials in Settings for the full playlist)`
         : "";
       setStatus(`"${data.name || "Playlist"}" - ${tracks.length} tracks${note}`);
       list.innerHTML = tracks.map(playlistTrackRow).join("");
@@ -1675,7 +1675,7 @@
   function renderActivity(items) {
     if (!items.length) {
       activitySummary.textContent = "";
-      activityContainer.innerHTML = `<div class="empty-state">Nothing here yet - downloads you start will show up in this list.</div>`;
+      activityContainer.innerHTML = `<div class="empty-state">Nothing here yet. Downloads you start will show up in this list.</div>`;
       return;
     }
     const downloading = items.filter(a => a.status === "downloading");
@@ -1711,7 +1711,7 @@
           <thead><tr><th>#</th><th>Title</th><th>Artist</th><th>Album</th><th>Status</th><th>Time</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>`
-      : `<div class="empty-state">Queue is empty - nothing downloading right now.</div>`;
+      : `<div class="empty-state">Queue is empty. Nothing is downloading right now.</div>`;
 
     activityContainer.innerHTML = `${stats}${table}`;
   }
@@ -1772,7 +1772,7 @@
   function renderLibrary(items) {
     if (!items.length) {
       librarySummary.textContent = "";
-      libraryContainer.innerHTML = `<div class="empty-state">No downloads yet - saved tracks will show up here.</div>`;
+      libraryContainer.innerHTML = `<div class="empty-state">No downloads yet. Saved tracks will show up here.</div>`;
       expandAllBtn.hidden = true;
       return;
     }
