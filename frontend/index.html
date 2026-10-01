@@ -5,8 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FreeListen</title>
 <script>
-  // Applied before the stylesheet paints anything, so a saved preference
-  // doesn't flash the OS-default theme first.
+  // Runs before the stylesheet paints, so a saved theme doesn't flash.
   try {
     const saved = localStorage.getItem("theme");
     if (saved === "light" || saved === "dark") document.documentElement.dataset.theme = saved;
@@ -566,9 +565,7 @@
   const SUN_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
   const MOON_ICON = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
 
-  // Sidebar theme toggle - defaults to following the OS setting (via the
-  // prefers-color-scheme media query in <style>) until the user picks one
-  // explicitly, which is then remembered in localStorage.
+  // Follows prefers-color-scheme until the user picks a theme explicitly.
   const themeToggle = document.getElementById("themeToggle");
 
   function currentTheme() {
@@ -593,9 +590,6 @@
 
   renderThemeToggle();
 
-  // API keys (ListenBrainz token, Spotify credentials) live on the Settings
-  // page now, not hardcoded here - saved server-side via POST /api/settings
-  // (backend/settings.json) and loaded below at startup.
   let LISTENBRAINZ_TOKEN = "";
   const BACKEND = ""; // relative - this page is served by the same backend
 
@@ -647,17 +641,15 @@
       placeholder: "e.g. Queen",
       hint: "Just type the artist's name, e.g. <code>queen</code>",
       noun: "artists",
-      // There's only one field to search here, so this skips the shared
-      // title/artist query builder and just searches by name directly.
+      // One field only, so this skips the shared title/artist query builder.
       buildQuery: raw => {
         const name = raw.trim();
         if (!name) return "";
         return `artist:"${name.replace(/(["\\])/g, "\\$1")}"`;
       }
     },
-    // Not a MusicBrainz search at all - the form submit handler branches to
-    // searchPlaylist() for this mode instead of the generic search(). These
-    // fields exist just to drive the shared placeholder/hint/status UI.
+    // Not a MusicBrainz search: submit branches to searchPlaylist(). These
+    // fields only drive the shared placeholder, hint and status UI.
     playlist: {
       placeholder: "Paste a Spotify playlist link",
       hint: "Paste a public Spotify playlist link, e.g. <code>https://open.spotify.com/playlist/...</code>",
@@ -688,8 +680,8 @@
   const settingsSave = document.getElementById("settingsSave");
   const settingsStatus = document.getElementById("settingsStatus");
 
-  // mp3 is ffmpeg/LAME's 0(best)-9(worst) VBR scale; opus/m4a use an
-  // explicit target bitrate; flac is lossless, so there's nothing to pick.
+  // mp3 is LAME's 0(best)-9(worst) VBR scale; opus and m4a take a bitrate;
+  // flac is lossless.
   const QUALITY_OPTIONS = {
     mp3: [
       { value: "0", label: "Best (~245 kbps)" },
@@ -764,8 +756,7 @@
         body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
-      // The backend says *why* it couldn't save (an unwritable /config mount
-      // being the usual one) - show that rather than guessing at the cause.
+      // The backend says why it couldn't save, usually an unwritable /config.
       if (!res.ok) throw new Error(data.error || `Save failed (${res.status})`);
       LISTENBRAINZ_TOKEN = body.listenbrainzToken;
       settingsStatus.textContent = "Saved ✓";
@@ -780,17 +771,15 @@
 
   loadSettings();
 
-  // How many of an artist's most-popular tracks the "Download top N" button
-  // fetches, read live from the number input (clamped to a sane range).
+  // Read live from the number input, clamped.
   function clampTopN() {
     const n = parseInt(topNInput.value, 10);
     if (!Number.isFinite(n) || n < 1) return 1;
     return n;
   }
 
-  // Keeps any already-rendered "Download top N" buttons in sync when the
-  // count is changed without re-searching. Buttons mid-download are left
-  // alone so their progress text isn't clobbered.
+  // Resyncs rendered buttons when the count changes without a re-search.
+  // Buttons mid-download keep their progress text.
   function refreshArtistButtonLabels() {
     document.querySelectorAll("[data-dl-artist]").forEach(btn => {
       if (!btn.disabled) btn.innerHTML = `${DOWNLOAD_ICON} Download top ${clampTopN()} tracks`;
@@ -816,16 +805,14 @@
   }
 
   // ---------------- Result grouping ----------------
-  // MusicBrainz indexes a song once per release it appeared on, so a single
-  // hit can occupy hundreds of near-identical rows ("Billie Jean" has 989).
-  // Left alone that floods the results - one song fills the whole page and
-  // genuinely different matches never get shown.
+  // MusicBrainz indexes a song once per release it appeared on, so one hit
+  // can occupy hundreds of near-identical rows ("Billie Jean" has 989) and
+  // fill the whole page.
   //
-  // These collapse a result set into one row per distinct song, and pick
-  // which underlying recording represents it. That choice matters beyond
-  // display: the chosen recording's release is what supplies album, year,
-  // track number and cover art on download, so preferring the original
-  // studio release over a random compilation improves the saved file too.
+  // These collapse that to one row per song and pick the representative
+  // recording. That choice also decides the album, year, track number and
+  // cover art written into the file, so the original studio release beats a
+  // compilation.
   function groupingKey(s) {
     return String(s || "")
       .toLowerCase()
@@ -836,8 +823,8 @@
       .trim();
   }
 
-  // An official standalone album/single/EP release - i.e. not a compilation,
-  // live album, bootleg or soundtrack appearance.
+  // An official standalone album, single or EP: no compilation, live album,
+  // bootleg or soundtrack appearance.
   function isStudioRelease(rel) {
     const rg = rel["release-group"] || {};
     return rel.status === "Official"
@@ -845,8 +832,7 @@
       && ["Album", "Single", "EP"].includes(rg["primary-type"]);
   }
 
-  // Best release to take metadata from: a studio one if any, earliest first
-  // (the original issue rather than a later reissue).
+  // Metadata source: a studio release if any, earliest first.
   function bestRelease(rec) {
     const rels = (rec.releases || []).slice();
     if (!rels.length) return null;
@@ -865,11 +851,9 @@
     return dates.sort()[0] || "9999";
   }
 
-  // Collapses recordings into one entry per song. The entry is a real
-  // recording object (so download/links keep working unchanged) with two
-  // extra fields: releaseCount - how many releases the song appears across,
-  // which is a good popularity proxy, since famous songs get reissued and
-  // compiled endlessly - and variantCount, for reference.
+  // One entry per song, still a real recording object so download and links
+  // keep working. releaseCount is the popularity proxy: famous songs get
+  // reissued and compiled endlessly.
   function groupSongs(recordings) {
     const groups = new Map();
     for (const rec of recordings) {
@@ -878,11 +862,9 @@
       groups.get(key).push(rec);
     }
     return [...groups.values()].map(recs => {
-      // Pick the recording to represent the group: one with a studio
-      // release, and of those the oldest - that's the original, rather than
-      // a re-recording or a version that only exists on a later reissue.
-      // Without the date check a 2012 anniversary edition can win on release
-      // count alone and tag the file with the wrong album entirely.
+      // Oldest studio release wins, so the original beats a re-recording.
+      // Without the date check a 2012 anniversary edition wins on release
+      // count and tags the file with the wrong album.
       const ranked = recs.slice().sort((a, b) =>
         (hasStudioRelease(b) - hasStudioRelease(a)) ||
         recordingDate(a).localeCompare(recordingDate(b)) ||
@@ -897,10 +879,9 @@
     });
   }
 
-  // Turns "bohemian rhapsody artist:queen" into a proper Lucene query.
-  // "artist:" always comes last (per the hint text), so an unquoted artist
-  // name greedily captures to the end of the string - not just the first
-  // word - letting "artist:michael jackson" work without needing quotes.
+  // Turns "bohemian rhapsody artist:queen" into a Lucene query. "artist:"
+  // comes last, so an unquoted name captures to the end of the string and
+  // "artist:michael jackson" works without quotes.
   function buildQuery(raw, titleField) {
     const artistMatch = raw.match(/artist:("([^"]+)"|(.+))$/i);
     const artist = artistMatch ? (artistMatch[2] || artistMatch[3]).trim() : null;
@@ -951,12 +932,10 @@
 
   const PAGE_SIZE = 100;
 
-  // How deep to page. A bare title match can run to hundreds of results
-  // ordered arbitrarily (MusicBrainz scores every exact title match 100), so
-  // the well-known version of a song is often not on the first page at all -
-  // "billie jean" puts Michael Jackson at position 109. Paging deeper is what
-  // makes those findable; each page costs ~1s to MusicBrainz's rate limit, so
-  // searches that already name an artist stay shallow since they're precise.
+  // MusicBrainz scores every exact title match 100, so a bare title returns
+  // hundreds in arbitrary order: "billie jean" puts Michael Jackson at
+  // position 109. Paging deeper finds those. Each page costs a second of rate
+  // limit, so searches naming an artist stay shallow.
   function pagesFor(raw, searchMode) {
     if (searchMode === "artist") return 1;
     return /artist:/i.test(raw) ? 2 : 3;
@@ -1001,11 +980,10 @@
       // one row per thing as MusicBrainz returns them.
       const items = searchMode === "song" ? groupSongs(raws) : raws;
 
-      // Only artists still need ListenBrainz - songs rank on how many
-      // releases they appear across and albums on how many editions they
-      // have, both of which come free with the search response and beat
-      // ListenBrainz's per-recording counts (which fragment across every
-      // MBID of a song and read as single digits even for famous tracks).
+      // Only artists need ListenBrainz. Songs rank on release count and
+      // albums on edition count, both free with the search response.
+      // ListenBrainz's per-recording counts fragment across a song's MBIDs
+      // and read as single digits even for famous tracks.
       let popularityOk = true;
       if (searchMode === "artist") {
         setStatus("Ranking by popularity…");
@@ -1047,9 +1025,7 @@
     }
   }
 
-  // What "popularity" means per mode. Songs and albums both get a usable
-  // signal straight from the search response; only artists depend on
-  // ListenBrainz.
+  // What "popularity" means per mode. Only artists depend on ListenBrainz.
   function popularityScore(item, forMode) {
     if (forMode === "song") return item.releaseCount || 0;
     if (forMode === "album") return item.count || 0;
@@ -1137,13 +1113,11 @@
       </li>`;
   }
 
-  // Downloading audio from a YouTube video can't be done from the browser
-  // alone (YouTube doesn't serve raw audio files, and CORS blocks a direct
-  // fetch). The backend (POST /api/download) takes a search query - not a
-  // specific video - and resolves + downloads + converts it via yt-dlp's own
-  // built-in search, tags the result with title/artist/album/year/genre, and
-  // saves it as "<title> - <artist>.mp3" in its own save folder on the
-  // machine it runs on. Nothing comes back to the browser to save.
+  // The browser can't do this alone: YouTube serves no raw audio and CORS
+  // blocks a direct fetch. POST /api/download takes a search query rather
+  // than a video id, and yt-dlp resolves, downloads, converts and tags it
+  // into Artist/Album/NN - Title.ext on the server. Nothing returns to the
+  // browser to save.
   function lyricsQueryFor(title, artist) {
     return `${artist} ${title} lyrics`;
   }
@@ -1159,12 +1133,8 @@
     return data;
   }
 
-  // Shared single-track download: posts the download, retries once after a
-  // pause on failure (YouTube downloads occasionally fail transiently - a bad
-  // format pick, a momentary throttle), and reflects progress on the button.
-  // Hands the track to the backend queue and returns - the download itself
-  // happens in the background, and its outcome arrives as a toast. Retries
-  // live on the server now, so there's nothing to wait around for here.
+  // Hands the track to the backend queue and returns. The download runs in
+  // the background, retries server-side, and reports back as a toast.
   async function runDownload(button, body) {
     const original = button.innerHTML; // innerHTML (not textContent) so the icon survives the restore
     button.disabled = true;
@@ -1182,9 +1152,8 @@
     }
   }
 
-  // MusicBrainz's "number" is the release's own label (e.g. "B4" on a vinyl
-  // side), not always a plain integer - only usable for ID3 tagging when
-  // it's purely numeric.
+  // MusicBrainz's "number" is the release's own label ("B4" on a vinyl side),
+  // so it is only usable as a track number when purely numeric.
   function numericTrackNumber(n) {
     return n != null && /^\d+$/.test(String(n)) ? Number(n) : null;
   }
@@ -1193,10 +1162,9 @@
     return releaseId ? `https://coverartarchive.org/release/${releaseId}/front-500` : null;
   }
 
-  // Prefer the release group's art over a specific release's: an individual
+  // The release group's art beats a specific release's: an individual
   // pressing often has none uploaded (the 1975 Italian A Night at the Opera
-  // 404s), while the group endpoint resolves to whichever edition does have
-  // it - and it's the same album cover either way.
+  // 404s), and it is the same cover either way.
   function coverArtUrlForGroup(releaseGroupId) {
     return releaseGroupId ? `https://coverartarchive.org/release-group/${releaseGroupId}/front-500` : null;
   }
@@ -1209,9 +1177,8 @@
     const id = button.dataset.dl;
     const rec = current.items.find(i => i.id === id);
     const artist = artistName(rec["artist-credit"]);
-    // bestRelease, not releases[0] - the first release MusicBrainz happens to
-    // return is often a compilation, which would tag the file with that
-    // instead of the album the song is actually from.
+    // bestRelease, not releases[0]: the first one returned is often a
+    // compilation, which would tag the file with the wrong album.
     const release = bestRelease(rec);
     const album = release?.title || null;
     const year = (rec["first-release-date"] || release?.date || "").slice(0, 4) || null;
@@ -1223,17 +1190,14 @@
   }
 
   // ---------- Artist "download top N" ----------
-  // ListenBrainz has a dedicated endpoint that returns an artist's recordings
-  // pre-sorted by actual play count, so there's no need to sample MusicBrainz's
-  // catalog browse (which comes back roughly alphabetical, not by popularity).
+  // ListenBrainz returns an artist's recordings pre-sorted by play count.
+  // MusicBrainz's catalog browse comes back roughly alphabetical instead.
   function normalizeTitle(title) {
     return String(title).toLowerCase().replace(/\s*[\(\[][^\)\]]*[\)\]]\s*$/, "").trim();
   }
 
-  // A trailing qualifier like "(Live at Wembley)" or "- Remastered 2011" marks
-  // a non-studio version. Only trailing bracket/dash segments are checked, so
-  // a title that starts with a word like "Live" (e.g. "Live and Let Die")
-  // isn't excluded by mistake.
+  // A trailing qualifier like "(Live at Wembley)" marks a non-studio version.
+  // Only trailing segments are checked, so "Live and Let Die" survives.
   function isRemasterOrLiveVersion(title) {
     const segments = [];
     const bracketRe = /[\(\[]([^\)\]]*)[\)\]]/g;
@@ -1256,9 +1220,8 @@
     const opts = LISTENBRAINZ_TOKEN ? { headers: { Authorization: `Token ${LISTENBRAINZ_TOKEN}` } } : {};
     const res = await fetch(url, opts);
     if (res.ok) return res.json();
-    // ListenBrainz has started rate-limiting/gating this endpoint against
-    // scrapers, which can intermittently 401/429 a legitimate request even
-    // with a token. One retry after a short pause clears most of these.
+    // ListenBrainz gates this endpoint against scrapers and can 401 or 429 a
+    // legitimate request even with a token. One retry clears most of them.
     if (res.status === 401 || res.status === 429) {
       await new Promise(r => setTimeout(r, 2000));
       const retryRes = await fetch(url, opts);
@@ -1278,8 +1241,7 @@
     const top = [];
     for (const item of items) {
       if (!item.recording_mbid || !item.recording_name) continue;
-      // Drop very short recordings - usually interview clips, intros, or skits
-      // rather than actual songs.
+      // Drop very short recordings: interview clips, intros and skits.
       if (item.length && item.length < 30000) continue;
       if (isRemasterOrLiveVersion(item.recording_name)) continue;
       const key = normalizeTitle(item.recording_name);
@@ -1296,10 +1258,9 @@
       if (top.length >= n) break;
     }
 
-    // ListenBrainz doesn't return a release year or track position, so look
-    // them up per selected track (only for the final N, to keep this from
-    // ballooning into hundreds of MusicBrainz requests). +media adds track
-    // position/cover-art-eligible release id at no extra request cost.
+    // ListenBrainz returns no year or track position, so look them up for
+    // the final N only, rather than hundreds of MusicBrainz requests. +media
+    // adds track position and a cover-art release id at no extra cost.
     for (const rec of top) {
       try {
         const res = await mbFetch(`https://musicbrainz.org/ws/2/recording/${rec.id}?inc=releases+media+release-groups&fmt=json`);
@@ -1317,13 +1278,10 @@
     return top;
   }
 
-  // Playlist tracks from playlist-backend (SpotipyFree) arrive with real
-  // title/artist/trackNumber but no album/year (that source's playlist
-  // listing doesn't carry them) and no cover art. Rather than looking this
-  // up for every track when the playlist loads - each lookup takes ~2-5s,
-  // which would mean several minutes before a large playlist even displays -
-  // it's fetched here instead, right before a track is actually downloaded.
-  // Mutates rec in place and marks it done so a retry doesn't redo the work.
+  // SpotipyFree playlist tracks arrive with title, artist and track number
+  // but no album, year or cover art. Each lookup takes 2 to 5 seconds, so
+  // doing it on load would stall a large playlist for minutes. This runs per
+  // track at download time, mutating rec in place and marking it done.
   async function enrichPlaylistTrack(rec) {
     if (rec._enriched || !rec.id || rec.album) return;
     rec._enriched = true;
@@ -1338,9 +1296,8 @@
       console.warn(`Track enrichment failed for "${rec.title}":`, err);
     }
     if (!rec.album || rec.coverArtUrl) return;
-    // Cover art isn't sourced from Spotify at all - once a real album name
-    // is known, look it up the same way song search does: MusicBrainz
-    // release search -> Cover Art Archive.
+    // Art never comes from Spotify. Once a real album name is known, this
+    // follows song search: MusicBrainz release search, then Cover Art Archive.
     try {
       const esc2 = s => s.replace(/"/g, '\\"');
       const q = `artist:"${esc2(rec.artist)}" AND release:"${esc2(rec.album)}"`;
@@ -1365,12 +1322,10 @@
     });
   }
 
-  // Shared by the artist "download top N", album and playlist "download all"
-  // buttons. This only queues the tracks - the backend drains the queue one
-  // at a time - so it finishes in about as long as the requests take rather
-  // than holding the button for the length of every download. Playlist
-  // tracks are the exception: they need a ~2-5s metadata lookup each before
-  // they can be queued, which is why there's still per-track progress.
+  // Shared by the artist, album and playlist bulk buttons. It only queues,
+  // so it returns in about the time the requests take. Playlist tracks are
+  // the exception: each needs a 2 to 5 second lookup before it can be queued,
+  // which is why they still show per-track progress.
   async function downloadTracksBulk(button, tracks, artistFor) {
     const original = button.innerHTML; // innerHTML so the icon survives the restore
     button.disabled = true;
@@ -1426,12 +1381,10 @@
   }
 
   // ---------- Album download ----------
-  // A release group is the album as a concept; the actual track list lives on
-  // its individual releases, of which a popular album can have dozens
-  // (A Night at the Opera has 74). They disagree: reissues add bonus tracks,
-  // box sets bundle several discs. Picking the track count that the most
-  // official editions agree on gets the album as it was actually released,
-  // rather than whichever edition happened to come back first.
+  // A release group is the album as a concept; the track list lives on its
+  // individual releases, and a popular album has dozens (A Night at the Opera
+  // has 74). They disagree, since reissues add bonus tracks and box sets
+  // bundle discs, so take the track count most official editions agree on.
   async function fetchAlbumRelease(releaseGroupId) {
     const res = await mbFetch(`https://musicbrainz.org/ws/2/release?release-group=${releaseGroupId}`
       + `&inc=recordings+artist-credits&fmt=json&limit=100`);
@@ -1516,9 +1469,8 @@
       return;
     }
     const note = popularityFailed ? " (play counts unavailable right now)" : "";
-    // For songs, `count` is MusicBrainz's raw recording matches - far higher
-    // than the number of actual songs, since each is indexed once per
-    // release - so quoting it against the grouped count would just look wrong.
+    // For songs, `count` is raw recording matches, far higher than the number
+    // of songs, so quoting it against the grouped count would read wrong.
     setStatus(current.mode === "song"
       ? `Showing ${items.length} ${cfg.noun}${note}`
       : `Showing ${items.length} of ${count.toLocaleString()} ${cfg.noun}${note}`);
@@ -1527,10 +1479,8 @@
   }
 
   // ---------------- Playlists ----------------
-  // Not a MusicBrainz search: fetches a Spotify playlist's tracks via this
-  // same backend's /api/playlist, which itself proxies to the SpotipyFree
-  // playlist-backend service when configured (see docker-compose.yml),
-  // falling back to its own embed-page/official-API logic otherwise.
+  // Not a MusicBrainz search. /api/playlist proxies to playlist-backend when
+  // configured, and falls back to the embed page or official API otherwise.
   async function searchPlaylist(url) {
     if (!url.trim()) return;
     btn.disabled = true;
@@ -1586,8 +1536,8 @@
     const rec = current.items[Number(button.dataset.dlPlaylist)];
     if (!rec) return;
     if (rec.id && !rec.album) {
-      // Give the button some feedback for the ~2-5s enrichment lookup below,
-      // instead of it looking unresponsive until runDownload takes over.
+      // Feedback for the 2 to 5 second lookup below, so the button isn't
+      // silent until runDownload takes over.
       const original = button.innerHTML;
       button.disabled = true;
       button.textContent = "Looking up…";
@@ -1658,9 +1608,8 @@
   }
 
   // ---------------- Toasts ----------------
-  // Downloads finish in the background now, possibly while you're on another
-  // page, so completions and failures surface here instead of only being
-  // visible if you happen to be watching the Activity table.
+  // Downloads finish in the background, possibly while you are on another
+  // page, so outcomes surface here rather than only in the Activity table.
   const toastHost = document.getElementById("toasts");
   // Which activity ids have already been announced, so a poll that sees the
   // same finished item again doesn't re-toast it.
@@ -1679,7 +1628,7 @@
       <button type="button" class="toast-close" aria-label="Dismiss">&times;</button>`;
     el.querySelector(".toast-close").addEventListener("click", () => el.remove());
     toastHost.appendChild(el);
-    // Failures stay longer - there's a reason to read.
+    // Failures stay longer, since there is a reason to read.
     setTimeout(() => {
       el.classList.add("toast-out");
       setTimeout(() => el.remove(), 250);
@@ -1711,8 +1660,7 @@
       if (!res.ok) return;
       const data = await res.json();
       const items = data.items || [];
-      // The badge counts everything still outstanding, queued included -
-      // that's the number of things you're waiting on.
+      // Counts everything outstanding, queued included.
       const outstanding = items.filter(a => a.status === "downloading" || a.status === "queued").length;
       activeBadge.hidden = outstanding === 0;
       activeBadge.textContent = outstanding;
@@ -1743,9 +1691,8 @@
         ${statCard(X_ICON, failed, "Failed")}
       </div>`;
 
-    // The queue: what's downloading now, then what's waiting, in the order
-    // it'll be worked through. Finished items drop off here and surface as
-    // toasts instead - they'd otherwise push the actual queue off screen.
+    // Downloading now, then waiting, in working order. Finished items drop
+    // off and surface as toasts, or they would push the queue off screen.
     const inQueue = [...downloading, ...queued.slice().reverse()];
     const rows = inQueue.map((a, i) => `
       <tr>
@@ -1781,8 +1728,8 @@
     }
   });
 
-  // Poll while the Activity tab is open, and always keep the sidebar badge
-  // current in the background (lightweight - same endpoint, just counts).
+  // Polls while the Activity tab is open, and keeps the sidebar badge current
+  // in the background off the same endpoint.
   setInterval(() => {
     if (document.getElementById("page-activity").classList.contains("active")) refreshActivity();
   }, 3000);
@@ -1838,9 +1785,8 @@
         ${statCard(DISK_ICON, (totalBytes / (1024 * 1024 * 1024)).toFixed(2) + " GB", "On disk")}
       </div>`;
 
-    // Grouped into albums rather than listed as loose tracks - the artwork
-    // is the point of a music library, and one tile per track would repeat
-    // the same cover a dozen times per album.
+    // Grouped into albums: one tile per track would repeat the same cover a
+    // dozen times per album.
     const albums = new Map();
     for (const t of items) {
       const key = `${t.artist || "Unknown artist"}|${t.album || ""}`;
@@ -1864,9 +1810,8 @@
     const cards = [...albums.values()]
       .sort((a, b) => b.newest - a.newest)
       .map((a, i) => {
-        // Art comes from the first track that has any; the backend 404s for
-        // files without an embedded picture and onerror falls back to the
-        // placeholder.
+        // Art comes from the first track that has any. The backend 404s for
+        // files with no embedded picture, and onerror shows the placeholder.
         const artSrc = `${BACKEND}/api/library/art/${encodeURIComponent(a.tracks[0].path)}`;
         a.tracks.sort((x, y) => String(x.filename).localeCompare(String(y.filename), undefined, { numeric: true }));
         const trackRows = a.tracks.map(t => `
@@ -1924,9 +1869,8 @@
     card.querySelector("[data-album-toggle]").setAttribute("aria-expanded", String(open));
   }
 
-  // The button's label is what the next click will do, so it flips to
-  // "Collapse all" only once everything is actually open - including when
-  // you get there by opening the last one by hand.
+  // The label is what the next click does, so it flips to "Collapse all" only
+  // once everything is open, including by opening the last one by hand.
   function syncExpandAllBtn() {
     const cards = albumCards();
     expandAllBtn.hidden = !cards.length;

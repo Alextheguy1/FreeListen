@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Stages this app definition into a checkout of truenas/apps so their own CI
-# script can validate it, and so the result is ready to commit as a PR.
+# Stages this app definition into a checkout of truenas/apps, ready to commit.
 #
 #   ./stage-for-catalog.sh /path/to/truenas-apps-checkout
 #
@@ -8,8 +7,7 @@
 #   ./.github/scripts/ci.py --app freelisten --train community \
 #       --test-file basic-values.yaml
 #
-# That needs Docker - it renders the template and actually deploys the
-# containers, which is the part that can't be checked without it.
+# That needs Docker, since it deploys the containers as well as rendering.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,13 +32,8 @@ cp "$HERE/app.yaml" "$HERE/item.yaml" "$HERE/ix_values.yaml" \
 cp "$HERE/templates/docker-compose.yaml" "$DEST/templates/"
 cp "$HERE/templates/test_values/basic-values.yaml" "$DEST/templates/test_values/"
 
-# The shared library is vendored into every app rather than written by hand,
-# straight from the repo's own library/<version>/ into base_v<version>.
-#
-# It has to be a version their library/hashes.yaml knows about. Most existing
-# apps sit on much older versions because they're frozen at whatever was
-# current when each was last touched - copying from a neighbouring app is how
-# you end up pinned to something their tooling then refuses to update.
+# Vendor from the repo's own library/<version>/, never from a neighbouring app:
+# most apps are frozen on older versions their tooling then refuses to update.
 LIB_VERSION="$(grep '^lib_version:' "$HERE/app.yaml" | awk '{print $2}')"
 LIB_DIR="base_v$(echo "$LIB_VERSION" | tr '.' '_')"
 LIB_SRC="$APPS_REPO/library/$LIB_VERSION"
