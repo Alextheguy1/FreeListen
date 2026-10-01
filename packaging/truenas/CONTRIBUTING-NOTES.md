@@ -35,7 +35,7 @@ Then `./.github/scripts/ci.py --app freelisten --train community --test-file bas
   `ix_values.yaml` whenever a new version is released, and keep
   `app_version` in `app.yaml` in step with it.
 - **The default port must be unique across every app in the catalog.** Theirs
-  is checked by `.github/scripts/port_validation.py`. FreeListen uses 30102;
+  is checked by `.github/scripts/port_validation.py`. FreeListen uses 30504 (30102 was taken by stable/diskoverdata);
   if that gets taken before the PR merges, pick another free one and re-run
   that script.
 - **The container runs as uid 568**, not root. Anything in the image that
