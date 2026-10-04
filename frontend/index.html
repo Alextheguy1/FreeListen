@@ -374,6 +374,28 @@
   }
   footer.app-footer a { color: var(--muted); }
 
+
+  .auth-gate {
+    position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
+    background: var(--bg); padding: 24px;
+  }
+  .auth-card {
+    width: min(380px, 100%); display: flex; flex-direction: column; gap: 14px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 14px; padding: 28px;
+  }
+  .auth-brand { margin: 0; font-size: 1.1rem; color: var(--accent); }
+  .auth-card h2 { margin: 0; font-size: 1.45rem; }
+  .auth-card label { display: flex; flex-direction: column; gap: 6px; font-size: 0.9rem; }
+  .auth-card button { padding: 11px; font-size: 0.97rem; }
+  .auth-error { margin: 0; color: var(--danger, #ff6b6b); font-size: 0.87rem; }
+  .link-btn {
+    background: none; border: 0; padding: 0; color: var(--muted);
+    font-size: 0.82rem; text-decoration: underline; cursor: pointer; align-self: flex-start;
+  }
+  .link-btn:hover { color: var(--accent); }
+  .nav-signout { margin: 14px 0 0 18px; }
+
   @media (max-width: 760px) {
     .app { flex-direction: column; }
     .sidebar { width: 100%; height: auto; position: static; flex-direction: row; overflow-x: auto; }
@@ -409,6 +431,7 @@
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       Settings
     </button>
+    <button type="button" class="link-btn nav-signout" id="signOutBtn">Sign out</button>
     <div class="sidebar-footer">Songs · Albums · Artists · Playlists<br>via MusicBrainz &amp; yt-dlp</div>
   </nav>
 
@@ -532,8 +555,9 @@
           <h2>ListenBrainz</h2>
           <p class="field-help">Makes the artist "Download top N tracks" button reliable. ListenBrainz gates that endpoint against scrapers and can reject unauthenticated requests.</p>
           <label>User Token
-            <input type="text" id="setListenbrainz" placeholder="from listenbrainz.org/settings/" autocomplete="off">
+            <input type="password" id="setListenbrainz" placeholder="from listenbrainz.org/settings/" autocomplete="new-password">
           </label>
+          <button type="button" class="link-btn" id="setListenbrainzClear" hidden>Forget saved token</button>
         </div>
         <div class="settings-group">
           <h2>Spotify</h2>
@@ -541,9 +565,26 @@
           <label>Client ID
             <input type="text" id="setSpotifyId" placeholder="optional" autocomplete="off">
           </label>
+          <button type="button" class="link-btn" id="setSpotifyIdClear" hidden>Forget saved ID</button>
           <label>Client Secret
-            <input type="text" id="setSpotifySecret" placeholder="optional" autocomplete="off">
+            <input type="password" id="setSpotifySecret" placeholder="optional" autocomplete="new-password">
           </label>
+          <button type="button" class="link-btn" id="setSpotifySecretClear" hidden>Forget saved secret</button>
+          <p class="field-help">Saved credentials are never sent back to this page, so these show as blank once stored.</p>
+        </div>
+        <div class="settings-group">
+          <h2>Account</h2>
+          <p class="field-help">Signed in as <strong id="whoami">-</strong>.</p>
+          <label>Current password
+            <input type="password" id="pwCurrent" placeholder="current password" autocomplete="current-password">
+          </label>
+          <label>New password
+            <input type="password" id="pwNew" placeholder="at least 8 characters" autocomplete="new-password">
+          </label>
+          <div class="settings-actions">
+            <button type="button" id="pwSave">Change password</button>
+            <span id="pwStatus"></span>
+          </div>
         </div>
         <div class="settings-actions">
           <button type="button" id="settingsSave">Save</button>
@@ -553,6 +594,28 @@
     </section>
 
   </main>
+</div>
+
+<!-- Shown until first-run setup is done or the user signs in. The app shell
+     stays hidden behind it; every API route except setup/login refuses
+     anyway, so this is presentation, not the security boundary. -->
+<div id="authGate" class="auth-gate" hidden>
+  <form class="auth-card" id="authForm" autocomplete="on">
+    <h1 class="auth-brand">FreeListen</h1>
+    <h2 id="authTitle">Sign in</h2>
+    <p class="field-help" id="authBlurb"></p>
+    <label>Username
+      <input type="text" id="authUser" autocomplete="username" required>
+    </label>
+    <label>Password
+      <input type="password" id="authPass" autocomplete="current-password" required>
+    </label>
+    <label id="authConfirmRow" hidden>Confirm password
+      <input type="password" id="authConfirm" autocomplete="new-password">
+    </label>
+    <button type="submit" id="authSubmit">Sign in</button>
+    <p class="auth-error" id="authError" hidden></p>
+  </form>
 </div>
 
 <!-- Bottom-left, outside .app so it stays put regardless of page scroll. -->
@@ -590,8 +653,102 @@
 
   renderThemeToggle();
 
-  let LISTENBRAINZ_TOKEN = "";
+  // Shows whether a credential is stored without ever receiving its value.
+  function markSecretField(input, isSet) {
+    input.value = "";
+    input.dataset.wasSet = isSet ? "true" : "false";
+    input.dataset.cleared = "false";
+    input.placeholder = isSet ? "•••••••• saved (type to replace)" : input.dataset.emptyPlaceholder || "optional";
+    const hint = document.getElementById(input.id + "Clear");
+    if (hint) hint.hidden = !isSet;
+  }
   const BACKEND = ""; // relative - this page is served by the same backend
+
+  // ---------------- Sign-in gate ----------------
+  // The server refuses every route but setup and login until credentials
+  // exist, so this decides which form to show rather than granting access.
+  const authGate = document.getElementById("authGate");
+  const authForm = document.getElementById("authForm");
+  const authTitle = document.getElementById("authTitle");
+  const authBlurb = document.getElementById("authBlurb");
+  const authUser = document.getElementById("authUser");
+  const authPass = document.getElementById("authPass");
+  const authConfirm = document.getElementById("authConfirm");
+  const authConfirmRow = document.getElementById("authConfirmRow");
+  const authSubmit = document.getElementById("authSubmit");
+  const authError = document.getElementById("authError");
+  let needsSetup = false;
+
+  function showAuthError(msg) {
+    authError.textContent = msg;
+    authError.hidden = !msg;
+  }
+
+  function showGate(setupMode) {
+    needsSetup = setupMode;
+    authTitle.textContent = setupMode ? "Create your account" : "Sign in";
+    authBlurb.textContent = setupMode
+      ? "FreeListen has no account yet. Pick a username and password; they are stored on your server and nowhere else."
+      : "";
+    authConfirmRow.hidden = !setupMode;
+    authConfirm.required = setupMode;
+    authPass.autocomplete = setupMode ? "new-password" : "current-password";
+    authSubmit.textContent = setupMode ? "Create account" : "Sign in";
+    showAuthError("");
+    authGate.hidden = false;
+    authUser.focus();
+  }
+
+  authForm.addEventListener("submit", async e => {
+    e.preventDefault();
+    showAuthError("");
+    const username = authUser.value.trim();
+    const password = authPass.value;
+    if (needsSetup && password !== authConfirm.value) return showAuthError("Passwords do not match.");
+    authSubmit.disabled = true;
+    try {
+      const res = await fetch(`${BACKEND}/api/auth/${needsSetup ? "setup" : "login"}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Failed (${res.status})`);
+      authGate.hidden = true;
+      authPass.value = authConfirm.value = "";
+      startApp();
+    } catch (err) {
+      showAuthError(err.message || "Something went wrong.");
+    } finally {
+      authSubmit.disabled = false;
+    }
+  });
+
+  // Any route answering 401 means the session lapsed; 403 with setupRequired
+  // means the config was wiped. Either way, back to the gate.
+  async function api(path, options) {
+    const res = await fetch(`${BACKEND}${path}`, options);
+    if (res.status === 401) { showGate(false); throw new Error("Signed out"); }
+    if (res.status === 403) {
+      const body = await res.clone().json().catch(() => ({}));
+      if (body.setupRequired) { showGate(true); throw new Error("Setup required"); }
+    }
+    return res;
+  }
+
+  async function bootstrap() {
+    try {
+      const res = await fetch(`${BACKEND}/api/auth/status`);
+      const st = await res.json();
+      if (!st.configured) return showGate(true);
+      if (!st.authenticated) return showGate(false);
+      authGate.hidden = true;
+      startApp();
+    } catch {
+      showGate(false);
+      showAuthError("Could not reach the server.");
+    }
+  }
 
   // ---------------- Sidebar / page navigation ----------------
   const navItems = document.querySelectorAll(".nav-item");
@@ -723,13 +880,12 @@
 
   async function loadSettings() {
     try {
-      const res = await fetch(`${BACKEND}/api/settings`);
+      const res = await api("/api/settings");
       if (!res.ok) return;
       const data = await res.json();
-      LISTENBRAINZ_TOKEN = data.listenbrainzToken || "";
-      setListenbrainz.value = data.listenbrainzToken || "";
-      setSpotifyId.value = data.spotifyClientId || "";
-      setSpotifySecret.value = data.spotifyClientSecret || "";
+      markSecretField(setListenbrainz, data.listenbrainzTokenSet);
+      markSecretField(setSpotifyId, data.spotifyClientIdSet);
+      markSecretField(setSpotifySecret, data.spotifyClientSecretSet);
       setAudioFormat.value = data.audioFormat || "mp3";
       setSingleFiling.value = data.singleFiling || "single";
       renderQualityOptions(setAudioFormat.value, data.audioQuality);
@@ -738,19 +894,33 @@
     }
   }
 
+  // A field left untouched is omitted so the backend keeps what it has.
+  // Clearing a field that was set sends null, which the backend treats as
+  // "forget this one".
+  function secretField(input) {
+    const typed = input.value.trim();
+    if (typed) return typed;
+    return input.dataset.wasSet === "true" && input.dataset.cleared === "true" ? null : undefined;
+  }
+
   settingsSave.addEventListener("click", async () => {
     settingsSave.disabled = true;
     settingsStatus.textContent = "Saving…";
     try {
       const body = {
-        listenbrainzToken: setListenbrainz.value.trim(),
-        spotifyClientId: setSpotifyId.value.trim(),
-        spotifyClientSecret: setSpotifySecret.value.trim(),
         audioFormat: setAudioFormat.value,
         audioQuality: setAudioQuality.value,
         singleFiling: setSingleFiling.value,
       };
-      const res = await fetch(`${BACKEND}/api/settings`, {
+      for (const [key, input] of [
+        ["listenbrainzToken", setListenbrainz],
+        ["spotifyClientId", setSpotifyId],
+        ["spotifyClientSecret", setSpotifySecret],
+      ]) {
+        const v = secretField(input);
+        if (v !== undefined) body[key] = v;
+      }
+      const res = await api("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -758,7 +928,7 @@
       const data = await res.json().catch(() => ({}));
       // The backend says why it couldn't save, usually an unwritable /config.
       if (!res.ok) throw new Error(data.error || `Save failed (${res.status})`);
-      LISTENBRAINZ_TOKEN = body.listenbrainzToken;
+      await loadSettings();
       settingsStatus.textContent = "Saved ✓";
       setTimeout(() => { settingsStatus.textContent = ""; }, 2000);
     } catch (err) {
@@ -769,7 +939,6 @@
     }
   });
 
-  loadSettings();
 
   // Read live from the number input, clamped.
   function clampTopN() {
@@ -1123,7 +1292,7 @@
   }
 
   async function postDownload(body) {
-    const resp = await fetch(`${BACKEND}/api/download`, {
+    const resp = await api("/api/download", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
@@ -1215,23 +1384,13 @@
     return pool.slice().sort((a, b) => (b.count || 0) - (a.count || 0))[0]?.tag || null;
   }
 
+  // Goes through our own backend, which holds the ListenBrainz token and
+  // does the retry. The page never sees the token.
   async function fetchTopRecordings(artistId) {
-    const url = `https://api.listenbrainz.org/1/popularity/top-recordings-for-artist/${artistId}`;
-    const opts = LISTENBRAINZ_TOKEN ? { headers: { Authorization: `Token ${LISTENBRAINZ_TOKEN}` } } : {};
-    const res = await fetch(url, opts);
+    const res = await api(`/api/listenbrainz/top-recordings/${artistId}`);
     if (res.ok) return res.json();
-    // ListenBrainz gates this endpoint against scrapers and can 401 or 429 a
-    // legitimate request even with a token. One retry clears most of them.
-    if (res.status === 401 || res.status === 429) {
-      await new Promise(r => setTimeout(r, 2000));
-      const retryRes = await fetch(url, opts);
-      if (retryRes.ok) return retryRes.json();
-      const hint = LISTENBRAINZ_TOKEN
-        ? "it may still be rate-limiting this endpoint, try again shortly"
-        : "add a free token on the Settings page";
-      throw new Error(`ListenBrainz error (${retryRes.status}): ${hint}`);
-    }
-    throw new Error(`ListenBrainz error (${res.status})`);
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `ListenBrainz error (${res.status})`);
   }
 
   async function topTracksForArtist(artistId, n) {
@@ -1286,7 +1445,7 @@
     if (rec._enriched || !rec.id || rec.album) return;
     rec._enriched = true;
     try {
-      const res = await fetch(`${BACKEND}/api/playlist/track/${encodeURIComponent(rec.id)}`);
+      const res = await api(`/api/playlist/track/${encodeURIComponent(rec.id)}`);
       if (res.ok) {
         const data = await res.json();
         if (data.album) rec.album = data.album;
@@ -1591,7 +1750,7 @@
 
   async function refreshActivity() {
     try {
-      const res = await fetch(`${BACKEND}/api/activity`);
+      const res = await api("/api/activity");
       if (!res.ok) throw new Error(res.status);
       const data = await res.json();
       renderActivity(data.items || []);
@@ -1656,7 +1815,7 @@
 
   async function updateActiveBadge() {
     try {
-      const res = await fetch(`${BACKEND}/api/activity`);
+      const res = await api("/api/activity");
       if (!res.ok) return;
       const data = await res.json();
       const items = data.items || [];
@@ -1719,7 +1878,7 @@
   clearActivityBtn.addEventListener("click", async () => {
     clearActivityBtn.disabled = true;
     try {
-      await fetch(`${BACKEND}/api/activity`, { method: "DELETE" });
+      await api("/api/activity", { method: "DELETE" });
       await refreshActivity();
     } catch (err) {
       console.error(err);
@@ -1729,12 +1888,18 @@
   });
 
   // Polls while the Activity tab is open, and keeps the sidebar badge current
-  // in the background off the same endpoint.
-  setInterval(() => {
-    if (document.getElementById("page-activity").classList.contains("active")) refreshActivity();
-  }, 3000);
-  setInterval(updateActiveBadge, 5000);
-  updateActiveBadge();
+  // in the background off the same endpoint. Started by startApp so an
+  // unauthenticated page isn't firing requests that can only 401.
+  let pollersStarted = false;
+  function startPolling() {
+    if (pollersStarted) return;
+    pollersStarted = true;
+    setInterval(() => {
+      if (document.getElementById("page-activity").classList.contains("active")) refreshActivity();
+    }, 3000);
+    setInterval(updateActiveBadge, 5000);
+    updateActiveBadge();
+  }
 
   // ---------------- Library page ----------------
   const libraryContainer = document.getElementById("libraryContainer");
@@ -1755,7 +1920,7 @@
   async function refreshLibrary() {
     librarySummary.textContent = "Loading…";
     try {
-      const res = await fetch(`${BACKEND}/api/library`);
+      const res = await api("/api/library");
       if (!res.ok) throw new Error(res.status);
       const data = await res.json();
       renderLibrary(data.items || []);
@@ -1848,7 +2013,7 @@
     if (!confirm(`Delete "${title}"? This can't be undone.`)) return;
     button.disabled = true;
     try {
-      const res = await fetch(`${BACKEND}/api/library/${encodeURIComponent(filename)}`, { method: "DELETE" });
+      const res = await api(`/api/library/${encodeURIComponent(filename)}`, { method: "DELETE" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `Delete failed (${res.status})`);
       await refreshLibrary();
@@ -1900,6 +2065,65 @@
   });
 
   refreshLibraryBtn.addEventListener("click", refreshLibrary);
+
+  // ---------------- Account ----------------
+  const whoami = document.getElementById("whoami");
+  const pwCurrent = document.getElementById("pwCurrent");
+  const pwNew = document.getElementById("pwNew");
+  const pwSave = document.getElementById("pwSave");
+  const pwStatus = document.getElementById("pwStatus");
+
+  pwSave.addEventListener("click", async () => {
+    pwStatus.textContent = "";
+    if (pwNew.value.length < 8) { pwStatus.textContent = "At least 8 characters."; return; }
+    pwSave.disabled = true;
+    try {
+      const res = await api("/api/auth/password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword: pwCurrent.value, newPassword: pwNew.value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Failed (${res.status})`);
+      pwCurrent.value = pwNew.value = "";
+      pwStatus.textContent = "Password changed ✓";
+      setTimeout(() => { pwStatus.textContent = ""; }, 3000);
+    } catch (err) {
+      pwStatus.textContent = err.message || "Could not change password.";
+    } finally {
+      pwSave.disabled = false;
+    }
+  });
+
+  // "Forget" marks the field for clearing; the save handler then sends null.
+  for (const id of ["setListenbrainz", "setSpotifyId", "setSpotifySecret"]) {
+    const btn = document.getElementById(id + "Clear");
+    if (!btn) continue;
+    btn.addEventListener("click", () => {
+      const input = document.getElementById(id);
+      input.dataset.cleared = "true";
+      input.value = "";
+      input.placeholder = "will be cleared when you save";
+      btn.hidden = true;
+    });
+  }
+
+  document.getElementById("signOutBtn").addEventListener("click", async () => {
+    try { await fetch(`${BACKEND}/api/auth/logout`, { method: "POST" }); } catch {}
+    location.reload();
+  });
+
+  // Everything that needs a signed-in session starts here, not at parse time.
+  async function startApp() {
+    await loadSettings();
+    try {
+      const st = await (await fetch(`${BACKEND}/api/auth/status`)).json();
+      whoami.textContent = st.username || "-";
+    } catch {}
+    startPolling();
+  }
+
+  bootstrap();
 </script>
 </body>
 </html>

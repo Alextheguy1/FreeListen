@@ -207,6 +207,29 @@ Open the **Settings** page in the app to configure:
 These save to `backend/settings.json`, or the `/config` volume in Docker, via
 `POST /api/settings`. Nothing needs to be hardcoded or edited in source files.
 
+Credentials are write-only. `GET /api/settings` reports whether each one is
+stored, never its value, so the saved fields show as blank with a "saved"
+placeholder. Type a new value to replace one, or press "Forget" to clear it.
+
+## Accounts and access
+
+The first time you open FreeListen it asks you to create a username and
+password. Until you do, every route except the healthcheck and setup itself
+answers 403, so there is no window in which the queue, the library or the
+saved credentials are reachable.
+
+Passwords are stored as a scrypt hash with a per-install random salt. Signing
+in sets an `HttpOnly`, `SameSite=Strict` session cookie, which page scripts
+cannot read and another site cannot send. Sessions live in memory, so
+restarting the container signs everyone out and the page returns to the login
+screen on its next request. Change the password from the Account section of
+Settings; doing so invalidates every other session.
+
+Set `DISABLE_AUTH=true` to turn the login off, which is only sensible when
+something in front of FreeListen is already authenticating, such as a reverse
+proxy or an identity-aware proxy. On its own the app is still meant for your
+own network rather than the public internet.
+
 ## How it works
 
 - **Search**: the page queries MusicBrainz's public search API directly from
@@ -265,10 +288,12 @@ These save to `backend/settings.json`, or the `/config` volume in Docker, via
   Terms of Service, even though yt-dlp itself is a legitimate open-source tool.
   This is intended for personal use.
 - The Activity log is in-memory only and resets on restart.
-- The app has no auth of its own, and `GET /api/settings` returns the saved
-  Spotify secret and ListenBrainz token to anyone who can reach the port. Keep
-  it on your own local network, behind a reverse proxy with authentication if
-  you need it reachable from outside.
+- Sessions are held in memory, so a restart signs everyone out. There is one
+  account, not per-user accounts.
+- `GET /api/health` answers without a login, because that is what the
+  container healthcheck calls. It reports liveness and the queue length.
+- Cover art is fetched only from coverartarchive.org, archive.org and
+  scdn.co. A URL pointing anywhere else is refused rather than fetched.
 
 ## Project layout
 
@@ -300,8 +325,15 @@ These save to `backend/settings.json`, or the `/config` volume in Docker, via
 
 | Method | Path                    | Purpose                                  |
 | ------ | ----------------------- | ----------------------------------------- |
-| GET    | `/api/settings`         | Read saved API keys                       |
-| POST   | `/api/settings`         | Save API keys                             |
+| GET    | `/api/auth/status`      | Whether setup is done and you are signed in |
+| POST   | `/api/auth/setup`       | Create the account, first run only        |
+| POST   | `/api/auth/login`       | Sign in                                   |
+| POST   | `/api/auth/logout`      | Sign out                                  |
+| POST   | `/api/auth/password`    | Change the password                       |
+| GET    | `/api/health`           | Liveness, for the container healthcheck   |
+| GET    | `/api/settings`         | Which credentials are set, never their values |
+| POST   | `/api/settings`         | Save settings and credentials             |
+| GET    | `/api/listenbrainz/top-recordings/:mbid` | Proxied so the token stays server-side |
 | GET    | `/api/playlist`         | Resolve a Spotify playlist to a track list |
 | GET    | `/api/playlist/track/:id` | Real album/year for one playlist track  |
 | POST   | `/api/download`         | Queue one track for download              |

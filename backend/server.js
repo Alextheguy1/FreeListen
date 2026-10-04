@@ -2,6 +2,7 @@ const express = require("express");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const crypto = require("crypto");
 const { execFile } = require("child_process");
 const ytDlp = require("yt-dlp-exec");
 const ffmpegPath = require("ffmpeg-static");
@@ -46,6 +47,24 @@ const DEFAULT_QUALITY = { mp3: "4", flac: "", opus: "192K", m4a: "192K" };
 // tag, so music servers list it by song name. Album downloads ignore this.
 const SINGLE_FILING_MODES = ["single", "album"];
 
+// coverArtUrl arrives in the download request body, and the server fetches it.
+// Without a allowlist that is an SSRF: a caller could point it at a router
+// admin page or a cloud metadata endpoint, and read the response back out of
+// the saved file through /api/library/art. Only the hosts this app actually
+// sources art from are permitted. Cover Art Archive redirects into
+// archive.org's storage nodes, so those have to be here too.
+const COVER_ART_HOSTS = ["coverartarchive.org", "archive.org", "scdn.co"];
+const MAX_COVER_ART_BYTES = 10 * 1024 * 1024;
+
+function allowedCoverArtUrl(value) {
+  if (typeof value !== "string" || !value.trim()) return false;
+  let url;
+  try { url = new URL(value); } catch { return false; }
+  if (url.protocol !== "https:") return false;
+  const host = url.hostname.toLowerCase();
+  return COVER_ART_HOSTS.some(h => host === h || host.endsWith(`.${h}`));
+}
+
 function loadSettings() {
   let saved = {};
   try { saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8")); } catch {}
@@ -60,11 +79,141 @@ function loadSettings() {
       ? saved.audioQuality : (process.env.AUDIO_QUALITY || DEFAULT_QUALITY[audioFormat]),
     singleFiling: SINGLE_FILING_MODES.includes(saved.singleFiling) ? saved.singleFiling
       : SINGLE_FILING_MODES.includes(process.env.SINGLE_FILING) ? process.env.SINGLE_FILING : "single",
+    authUsername: typeof saved.authUsername === "string" ? saved.authUsername : "",
+    authSalt: typeof saved.authSalt === "string" ? saved.authSalt : "",
+    authHash: typeof saved.authHash === "string" ? saved.authHash : "",
   };
 }
 
 let settings = loadSettings();
 let spotifyToken = null; // { value, expiresAt } - cached Spotify app access token
+
+function persistSettings() {
+  ensureDir(CONFIG_DIR);
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), { mode: 0o600 });
+}
+
+// ---------------- Authentication ----------------
+// Credentials are chosen by whoever completes first-run setup. Until that
+// happens the app is unconfigured, and the middleware below answers every
+// route except setup with 403, so the window before setup cannot be used to
+// download, delete or read saved API keys.
+
+const AUTH_DISABLED = process.env.DISABLE_AUTH === "true";
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const sessions = new Map(); // token -> expiry epoch ms
+
+function authConfigured() {
+  return !!(settings.authUsername && settings.authHash && settings.authSalt);
+}
+
+function hashPassword(password, salt) {
+  return crypto.scryptSync(password, salt, 64).toString("hex");
+}
+
+function passwordMatches(password) {
+  const expected = Buffer.from(settings.authHash, "hex");
+  const actual = Buffer.from(hashPassword(password, settings.authSalt), "hex");
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+function issueSession() {
+  const token = crypto.randomBytes(32).toString("hex");
+  sessions.set(token, Date.now() + SESSION_TTL_MS);
+  return token;
+}
+
+function validSession(token) {
+  const expiry = token && sessions.get(token);
+  if (!expiry) return false;
+  if (expiry < Date.now()) { sessions.delete(token); return false; }
+  return true;
+}
+
+function readCookie(req, name) {
+  const raw = req.headers.cookie;
+  if (!raw) return null;
+  for (const part of raw.split(";")) {
+    const i = part.indexOf("=");
+    if (i > -1 && part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1));
+  }
+  return null;
+}
+
+// SameSite=Strict means a cross-site request never carries the cookie, which
+// is what stops another page driving this API in a logged-in browser.
+function setSessionCookie(res, token) {
+  res.setHeader("Set-Cookie",
+    `fl_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+}
+
+function clearSessionCookie(res) {
+  res.setHeader("Set-Cookie", "fl_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
+}
+
+// /api/health stays open because the container healthcheck curls it with no
+// credentials. It reports liveness only.
+// Paths are relative to the /api mount point below, not absolute.
+const OPEN_ROUTES = new Set(["/health", "/auth/status", "/auth/setup", "/auth/login"]);
+
+app.use("/api", (req, res, next) => {
+  if (AUTH_DISABLED || OPEN_ROUTES.has(req.path)) return next();
+  if (!authConfigured()) {
+    return res.status(403).json({ error: "Setup required", setupRequired: true });
+  }
+  if (!validSession(readCookie(req, "fl_session"))) {
+    return res.status(401).json({ error: "Not signed in" });
+  }
+  next();
+});
+
+app.get("/api/auth/status", (req, res) => {
+  res.json({
+    configured: authConfigured(),
+    authenticated: AUTH_DISABLED || validSession(readCookie(req, "fl_session")),
+    authDisabled: AUTH_DISABLED,
+    username: settings.authUsername || null,
+  });
+});
+
+app.post("/api/auth/setup", (req, res) => {
+  if (authConfigured()) return res.status(409).json({ error: "Already set up" });
+  const username = String(req.body?.username ?? "").trim();
+  const password = String(req.body?.password ?? "");
+  if (username.length < 3) return res.status(400).json({ error: "Username must be at least 3 characters" });
+  if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+
+  const salt = crypto.randomBytes(16).toString("hex");
+  settings = { ...settings, authUsername: username, authSalt: salt, authHash: hashPassword(password, salt) };
+  try {
+    persistSettings();
+  } catch (err) {
+    settings = { ...settings, authUsername: "", authSalt: "", authHash: "" };
+    return res.status(500).json({ error: `Could not write ${SETTINGS_FILE}: ${err.message || err}` });
+  }
+  setSessionCookie(res, issueSession());
+  res.json({ ok: true });
+});
+
+app.post("/api/auth/login", (req, res) => {
+  if (!authConfigured()) return res.status(403).json({ error: "Setup required", setupRequired: true });
+  const username = String(req.body?.username ?? "").trim();
+  const password = String(req.body?.password ?? "");
+  const userOk = username === settings.authUsername;
+  // Hash regardless of whether the username matched, so a wrong username and
+  // a wrong password take the same time to reject.
+  const passOk = passwordMatches(password);
+  if (!userOk || !passOk) return res.status(401).json({ error: "Wrong username or password" });
+  setSessionCookie(res, issueSession());
+  res.json({ ok: true });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  const token = readCookie(req, "fl_session");
+  if (token) sessions.delete(token);
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
 
 // Liveness probe for container healthchecks. Touches no disk and no upstream
 // API, so it reports on this server rather than on MusicBrainz.
@@ -72,9 +221,29 @@ app.get("/api/health", (req, res) => {
   res.json({ ok: true, queued: pending.length, active: activeJobs });
 });
 
+// Never returns the saved credentials, only whether each one is set. The UI
+// shows "set"/"not set" and sends a replacement when the user types one.
 app.get("/api/settings", (req, res) => {
-  res.json(settings);
+  res.json({
+    audioFormat: settings.audioFormat,
+    audioQuality: settings.audioQuality,
+    singleFiling: settings.singleFiling,
+    spotifyClientIdSet: !!settings.spotifyClientId,
+    spotifyClientSecretSet: !!settings.spotifyClientSecret,
+    listenbrainzTokenSet: !!settings.listenbrainzToken,
+    authUsername: settings.authUsername || null,
+  });
 });
+
+// A secret is replaced only when a non-empty string arrives, and cleared only
+// on an explicit null. The UI never holds the saved value, so it sends nothing
+// for a field the user did not touch.
+function nextSecret(body, key, current) {
+  if (!(key in body)) return current;
+  if (body[key] === null) return "";
+  const v = typeof body[key] === "string" ? body[key].trim() : "";
+  return v || current;
+}
 
 app.post("/api/settings", (req, res) => {
   const body = req.body || {};
@@ -84,24 +253,78 @@ app.post("/api/settings", (req, res) => {
   // falls back to the new format's default instead of reaching ffmpeg.
   const rawQuality = clean(body.audioQuality);
   const qualityValid = rawQuality != null && (/^[0-9]$/.test(rawQuality) || /^\d+K$/i.test(rawQuality));
+  const previous = settings;
   settings = {
-    spotifyClientId: clean(body.spotifyClientId) ?? settings.spotifyClientId,
-    spotifyClientSecret: clean(body.spotifyClientSecret) ?? settings.spotifyClientSecret,
-    listenbrainzToken: clean(body.listenbrainzToken) ?? settings.listenbrainzToken,
+    ...settings,
+    spotifyClientId: nextSecret(body, "spotifyClientId", settings.spotifyClientId),
+    spotifyClientSecret: nextSecret(body, "spotifyClientSecret", settings.spotifyClientSecret),
+    listenbrainzToken: nextSecret(body, "listenbrainzToken", settings.listenbrainzToken),
     audioFormat,
     audioQuality: qualityValid ? rawQuality : DEFAULT_QUALITY[audioFormat],
     singleFiling: SINGLE_FILING_MODES.includes(body.singleFiling) ? body.singleFiling : settings.singleFiling,
   };
   spotifyToken = null; // credentials may have changed - drop the cached token
   try {
-    ensureDir(CONFIG_DIR);
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+    persistSettings();
     res.json({ ok: true });
   } catch (err) {
+    settings = previous;
     // Usually /config not being writable by the container's uid.
     console.error("Saving settings failed:", err.message || err);
     res.status(500).json({ error: `Could not write ${SETTINGS_FILE}: ${err.message || err}` });
   }
+});
+
+// Proxied rather than called from the page, so the ListenBrainz token stays
+// on the server. The browser used to send it itself, which meant the token
+// had to be handed out by GET /api/settings.
+app.get("/api/listenbrainz/top-recordings/:artistMbid", async (req, res) => {
+  const mbid = req.params.artistMbid;
+  if (!/^[0-9a-f-]{36}$/i.test(mbid)) return res.status(400).json({ error: "Bad artist id" });
+
+  const url = `https://api.listenbrainz.org/1/popularity/top-recordings-for-artist/${mbid}`;
+  const opts = settings.listenbrainzToken
+    ? { headers: { Authorization: `Token ${settings.listenbrainzToken}` } }
+    : {};
+  try {
+    let upstream = await fetch(url, opts);
+    // ListenBrainz gates this endpoint against scrapers and can 401 or 429 a
+    // legitimate request even with a token. One retry clears most of them.
+    if (upstream.status === 401 || upstream.status === 429) {
+      await new Promise(r => setTimeout(r, 2000));
+      upstream = await fetch(url, opts);
+    }
+    if (!upstream.ok) {
+      const hint = settings.listenbrainzToken
+        ? "it may still be rate-limiting this endpoint, try again shortly"
+        : "add a free token on the Settings page";
+      return res.status(502).json({ error: `ListenBrainz error (${upstream.status}): ${hint}` });
+    }
+    res.json(await upstream.json());
+  } catch (err) {
+    res.status(502).json({ error: `ListenBrainz request failed: ${err.message || err}` });
+  }
+});
+
+app.post("/api/auth/password", (req, res) => {
+  const current = String(req.body?.currentPassword ?? "");
+  const next = String(req.body?.newPassword ?? "");
+  if (!passwordMatches(current)) return res.status(401).json({ error: "Current password is wrong" });
+  if (next.length < 8) return res.status(400).json({ error: "New password must be at least 8 characters" });
+
+  const previous = settings;
+  const salt = crypto.randomBytes(16).toString("hex");
+  settings = { ...settings, authSalt: salt, authHash: hashPassword(next, salt) };
+  try {
+    persistSettings();
+  } catch (err) {
+    settings = previous;
+    return res.status(500).json({ error: `Could not write ${SETTINGS_FILE}: ${err.message || err}` });
+  }
+  // Every other session is now stale; keep only the one that made the change.
+  const keep = readCookie(req, "fl_session");
+  for (const token of [...sessions.keys()]) if (token !== keep) sessions.delete(token);
+  res.json({ ok: true });
 });
 
 // yt-dlp needs Deno to decrypt some YouTube format URLs. bin/ holds a
@@ -653,10 +876,20 @@ async function attemptDownload(job, record) {
 
     // Best-effort: a missing/unreachable cover shouldn't fail the download.
     let coverBuffer = null;
-    if (typeof coverArtUrl === "string" && coverArtUrl.trim() && SUPPORTS_EMBEDDED_ART[format]) {
+    if (allowedCoverArtUrl(coverArtUrl) && SUPPORTS_EMBEDDED_ART[format]) {
       try {
-        const imgRes = await fetch(coverArtUrl);
-        if (imgRes.ok) coverBuffer = Buffer.from(await imgRes.arrayBuffer());
+        const imgRes = await fetch(coverArtUrl, { redirect: "follow" });
+        const finalUrl = imgRes.url || coverArtUrl;
+        // A redirect can leave the allowlist, so re-check where we landed.
+        if (imgRes.ok && allowedCoverArtUrl(finalUrl)) {
+          const len = Number(imgRes.headers.get("content-length") || 0);
+          if (len <= MAX_COVER_ART_BYTES) {
+            const buf = Buffer.from(await imgRes.arrayBuffer());
+            if (buf.length <= MAX_COVER_ART_BYTES) coverBuffer = buf;
+          }
+        } else if (imgRes.ok) {
+          console.warn(`Cover art redirected off-allowlist for "${title}": ${finalUrl}`);
+        }
       } catch (e) {
         console.warn(`Cover art fetch failed for "${title}":`, e.message || e);
       }

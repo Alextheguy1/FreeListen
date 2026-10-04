@@ -21,11 +21,9 @@ import re
 import traceback
 
 from flask import Flask, jsonify, request
-from flask_cors import CORS
 from SpotipyFree import Spotify
 
 app = Flask(__name__)
-CORS(app)
 
 PLAYLIST_ID_RE = re.compile(r"playlist[/:]([a-zA-Z0-9]+)")
 
@@ -135,6 +133,11 @@ def get_track(track_id):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5058))
+    # Loopback only. The Node backend shares this container's network
+    # namespace, so it reaches us over localhost either way, and binding
+    # 0.0.0.0 would put this unauthenticated service straight on the host
+    # whenever someone enables host networking.
+    host = os.environ.get("HOST", "127.0.0.1")
     # threaded=True: Flask's dev server is otherwise serial, so a second
     # playlist load blocks until the first multi-page fetch finishes.
-    app.run(host="0.0.0.0", port=port, threaded=True)
+    app.run(host=host, port=port, threaded=True)
