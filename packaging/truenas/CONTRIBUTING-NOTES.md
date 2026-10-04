@@ -59,3 +59,19 @@ language model. Tick it if that applies.
   merged. `assets/icon.svg` in this repo is the source image to give them.
 - **`maintainers` is TrueNAS**, not the contributor. That is their convention
   for community apps, since they take on maintenance once it is merged.
+
+## What the maintainer changed on merge
+
+PR #5960 was merged with a `minor` commit from stavros-k. Keep these in step,
+or a re-stage will revert them:
+
+- The catalog README is one short paragraph, not a full document. Everything
+  else belongs in the repo README.
+- No `annotations.min_scale_version`. That came from copying navidrome.
+- Question labels do not repeat the app name: `Config Storage`, not
+  `FreeListen Config Storage`.
+- `storage_entry`, not `storageEntry`. The old spelling is on an allowlist in
+  their validator so the script accepts it, but new apps use snake_case.
+- Their boilerplate for the Compose priority field uses a typographic
+  apostrophe in `service's`.
+- New app names go in the repo's `cspell.config.yaml`.
