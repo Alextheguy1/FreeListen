@@ -66,8 +66,7 @@ queue and history), **Library** (everything saved to disk, with delete), and
   downloads are safe to re-run.
 - Automatic retry with backoff on the transient failures YouTube downloads
   occasionally hit.
-- Settings page for API keys and download quality. Nothing is hardcoded in
-  source.
+- Settings page for API keys and download quality.
 
 ## Architecture
 
