@@ -443,11 +443,15 @@ async function mapLimit(items, limit, fn) {
   return results;
 }
 
+// Strips separators and the characters Windows rejects. The trailing rule
+// matters most: "." and ".." survive every other replacement here, and a
+// single ".." as an artist name walks the save path up a level.
 function sanitizeForFilename(s) {
   return String(s)
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
     .trim()
-    .replace(/\s+/g, " ");
+    .replace(/\s+/g, " ")
+    .replace(/^\.+$/, "");
 }
 
 const AUDIO_EXT_RE = new RegExp(`\\.(${AUDIO_FORMATS.join("|")})$`, "i");
@@ -472,7 +476,19 @@ function findExistingDownload(dir, baseName) {
 function destDirFor(artist, album) {
   const artistFolder = sanitizeForFilename(artist) || "Unknown Artist";
   const albumFolder = album ? sanitizeForFilename(album) : "";
-  return albumFolder ? path.join(SAVE_DIR, artistFolder, albumFolder) : path.join(SAVE_DIR, artistFolder);
+  const dir = albumFolder
+    ? path.join(SAVE_DIR, artistFolder, albumFolder)
+    : path.join(SAVE_DIR, artistFolder);
+
+  // The write path has no equivalent of resolveLibraryPath, so it checks
+  // containment itself rather than trusting the sanitizer to have caught
+  // everything.
+  const root = path.resolve(SAVE_DIR);
+  if (!path.resolve(dir).startsWith(root + path.sep)) {
+    console.warn(`Refused a destination outside the library: ${dir}`);
+    return path.join(SAVE_DIR, "Unknown Artist");
+  }
+  return dir;
 }
 
 function buildFilename(title, trackNumber) {
