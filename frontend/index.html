@@ -382,31 +382,57 @@
 
   .auth-gate {
     position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
-    background: var(--bg); padding: 24px;
+    padding: 24px; background: var(--bg);
+  }
+  /* A soft wash behind the card so it reads as lit rather than pasted on. */
+  .auth-gate::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background:
+      radial-gradient(760px 420px at 50% -8%, var(--accent-soft), transparent 70%),
+      radial-gradient(520px 320px at 50% 115%, var(--accent-soft), transparent 72%);
+    opacity: 0.55;
   }
   .auth-card {
-    width: min(360px, 100%); display: flex; flex-direction: column; gap: 12px;
+    position: relative; width: min(372px, 100%);
+    display: flex; flex-direction: column;
     background: var(--card); border: 1px solid var(--border);
-    border-radius: 14px; padding: 30px 28px 26px;
-    box-shadow: 0 18px 50px rgba(0,0,0,0.35);
+    border-radius: 18px; padding: 34px 32px 30px;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.25);
   }
+  .auth-head { text-align: center; margin-bottom: 24px; }
   .auth-brand {
-    margin: 0 0 2px; font-size: 1rem; color: var(--accent);
-    display: flex; align-items: center; gap: 8px;
+    margin: 0 0 18px; font-size: 0.95rem; font-weight: 700; color: var(--accent);
+    display: inline-flex; align-items: center; gap: 8px; letter-spacing: 0.01em;
   }
-  .auth-brand svg { width: 20px; height: 20px; }
-  .auth-card h2 { margin: 0; font-size: 1.3rem; letter-spacing: -0.01em; }
-  .auth-card .field-help { margin: -2px 0 6px; font-size: 0.85rem; line-height: 1.45; }
+  .auth-brand svg { width: 19px; height: 19px; }
+  .auth-card h2 {
+    margin: 0; font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em;
+  }
+  .auth-card .field-help {
+    margin: 8px auto 0; max-width: 30ch; font-size: 0.86rem; line-height: 1.5;
+  }
   .auth-card label {
-    display: grid; gap: 6px; align-items: stretch;
-    font-size: 0.82rem; font-weight: 600; letter-spacing: 0.01em;
-    color: var(--text); text-transform: none;
+    display: grid; gap: 7px; margin-bottom: 14px;
+    font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em;
+    text-transform: uppercase; color: var(--muted);
   }
-  .auth-card input { width: 100%; padding: 10px 12px; font-size: 0.95rem; }
-  .auth-card button {
-    margin-top: 4px; padding: 12px; font-size: 0.97rem; font-weight: 600;
+  .auth-card input {
+    width: 100%; padding: 11px 13px; font-size: 0.95rem; border-radius: 10px;
   }
-  .auth-error { margin: 0; color: var(--danger, #ff6b6b); font-size: 0.87rem; }
+  .auth-card button[type=submit] {
+    width: 100%; margin-top: 6px; padding: 12px; border-radius: 10px;
+    font-size: 0.97rem; font-weight: 700; letter-spacing: 0.01em;
+  }
+  .auth-error {
+    margin: 14px 0 0; padding: 9px 12px; border-radius: 9px; text-align: center;
+    font-size: 0.86rem; color: #ffb4b4;
+    background: rgba(255,107,107,0.10); border: 1px solid rgba(255,107,107,0.28);
+  }
+  .auth-foot {
+    margin: 18px 0 0; text-align: center; font-size: 0.8rem; color: var(--muted);
+  }
+  .auth-foot a, .auth-foot button { color: var(--muted); text-decoration: underline; }
+  .auth-foot a:hover, .auth-foot button:hover { color: var(--accent); }
   .link-btn {
     background: none; border: 0; padding: 0; color: var(--muted);
     font-size: 0.82rem; text-decoration: underline; cursor: pointer; align-self: flex-start;
@@ -658,20 +684,23 @@
      anyway, so this is presentation, not the security boundary. -->
 <div id="authGate" class="auth-gate" hidden>
   <form class="auth-card" id="authForm" autocomplete="on">
-    <h1 class="auth-brand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>FreeListen</h1>
-    <h2 id="authTitle">Sign in</h2>
-    <p class="field-help" id="authBlurb"></p>
-    <label>Username
+    <div class="auth-head">
+      <h1 class="auth-brand"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>FreeListen</h1>
+      <h2 id="authTitle">Sign in</h2>
+      <p class="field-help" id="authBlurb"></p>
+    </div>
+    <label for="authUser">Username
       <input type="text" id="authUser" autocomplete="username" required>
     </label>
-    <label>Password
+    <label for="authPass">Password
       <input type="password" id="authPass" autocomplete="current-password" required>
     </label>
-    <label id="authConfirmRow" hidden>Confirm password
+    <label for="authConfirm" id="authConfirmRow" hidden>Confirm password
       <input type="password" id="authConfirm" autocomplete="new-password">
     </label>
     <button type="submit" id="authSubmit">Sign in</button>
     <p class="auth-error" id="authError" hidden></p>
+    <p class="auth-foot" id="authFoot" hidden>Forgotten it? Clear the three <code>auth</code> keys from <code>settings.json</code> and restart.</p>
   </form>
 </div>
 
@@ -752,6 +781,7 @@
     authPass.autocomplete = setupMode ? "new-password" : "current-password";
     authSubmit.textContent = setupMode ? "Create account" : "Sign in";
     showAuthError("");
+    document.getElementById("authFoot").hidden = setupMode;
     authGate.hidden = false;
     authUser.focus();
   }
