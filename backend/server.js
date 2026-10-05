@@ -46,6 +46,19 @@ const DEFAULT_QUALITY = { mp3: "4", flac: "", opus: "192K", m4a: "192K" };
 // How a one-off download is filed. "single" is Artist/Title with no album
 // tag, so music servers list it by song name. Album downloads ignore this.
 const SINGLE_FILING_MODES = ["single", "album"];
+const DOWNLOAD_SOURCES = ["youtube", "soundcloud"];
+const LYRICS_MODES = ["off", "embedded", "lrc", "both"];
+const MAX_CONCURRENCY_LIMIT = 5;
+
+// yt-dlp pseudo-URL prefixes. Both take "<prefix><n>:<query>" and return the
+// top n results, so switching source is a prefix change and nothing else.
+const SOURCE_SEARCH_PREFIX = { youtube: "ytsearch", soundcloud: "scsearch" };
+
+// Path templates. A "/" starts a new folder; the last segment is the
+// filename, and the extension is appended from the chosen audio format.
+const DEFAULT_ALBUM_TEMPLATE = "{artist}/{album}/{track} - {title}";
+const DEFAULT_SINGLE_TEMPLATE = "{artist}/{title}";
+const TEMPLATE_TOKENS = ["artist", "album", "title", "track", "year", "genre"];
 
 // coverArtUrl arrives in the download request body, and the server fetches it.
 // Without a allowlist that is an SSRF: a caller could point it at a router
@@ -65,6 +78,38 @@ function allowedCoverArtUrl(value) {
   return COVER_ART_HOSTS.some(h => host === h || host.endsWith(`.${h}`));
 }
 
+// LRCLIB needs no key and asks that clients identify themselves.
+const LRCLIB_UA = "FreeListen (https://github.com/Alextheguy1/FreeListen)";
+
+// /api/get wants an exact artist, track, album and duration match, so it is
+// tried first and /api/search picks up the rest. Lyrics are optional: any
+// failure here leaves the download alone.
+async function fetchLyrics(tags) {
+  const q = new URLSearchParams({ artist_name: tags.artist || "", track_name: tags.title || "" });
+  if (tags.album) q.set("album_name", tags.album);
+  const opts = { headers: { "User-Agent": LRCLIB_UA } };
+
+  try {
+    const exact = await fetch(`https://lrclib.net/api/get?${q}`, opts);
+    if (exact.ok) {
+      const hit = await exact.json();
+      if (!hit.instrumental && (hit.syncedLyrics || hit.plainLyrics)) return hit;
+    }
+
+    const search = await fetch(`https://lrclib.net/api/search?${q}`, opts);
+    if (!search.ok) return null;
+    const results = await search.json();
+    if (!Array.isArray(results)) return null;
+    // Prefer a result that carries timings, since that is what a .lrc is for.
+    return results.find(r => !r.instrumental && r.syncedLyrics)
+      || results.find(r => !r.instrumental && r.plainLyrics)
+      || null;
+  } catch (err) {
+    console.warn(`Lyrics lookup failed for "${tags.title}":`, err.message || err);
+    return null;
+  }
+}
+
 function loadSettings() {
   let saved = {};
   try { saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8")); } catch {}
@@ -82,7 +127,35 @@ function loadSettings() {
     authUsername: typeof saved.authUsername === "string" ? saved.authUsername : "",
     authSalt: typeof saved.authSalt === "string" ? saved.authSalt : "",
     authHash: typeof saved.authHash === "string" ? saved.authHash : "",
+    albumTemplate: validTemplate(saved.albumTemplate) ? saved.albumTemplate : DEFAULT_ALBUM_TEMPLATE,
+    singleTemplate: validTemplate(saved.singleTemplate) ? saved.singleTemplate : DEFAULT_SINGLE_TEMPLATE,
+    maxConcurrentDownloads: clampConcurrency(saved.maxConcurrentDownloads ?? process.env.MAX_CONCURRENT_DOWNLOADS),
+    lyrics: LYRICS_MODES.includes(saved.lyrics) ? saved.lyrics : "off",
+    downloadSource: DOWNLOAD_SOURCES.includes(saved.downloadSource) ? saved.downloadSource : "youtube",
   };
+}
+
+function clampConcurrency(v) {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 1) return 1;
+  return Math.min(n, MAX_CONCURRENCY_LIMIT);
+}
+
+// A template is a relative path of "/"-separated segments. Backslashes, "..",
+// a leading "/" and a drive letter are all refused outright rather than
+// sanitized, so a bad template is reported instead of silently rewritten.
+function validTemplate(t) {
+  if (typeof t !== "string" || !t.trim()) return false;
+  if (t.includes("\\") || t.startsWith("/") || /^[a-zA-Z]:/.test(t)) return false;
+  const segments = t.split("/").map(s => s.trim()).filter(Boolean);
+  if (!segments.length) return false;
+  if (segments.some(s => /^\.+$/.test(s))) return false;
+  // Must end up with something per track, not just folders.
+  if (!/\{(title|track)\}/.test(segments[segments.length - 1])) return false;
+  for (const token of t.match(/\{(\w+)\}/g) || []) {
+    if (!TEMPLATE_TOKENS.includes(token.slice(1, -1))) return false;
+  }
+  return true;
 }
 
 let settings = loadSettings();
@@ -232,6 +305,15 @@ app.get("/api/settings", (req, res) => {
     spotifyClientSecretSet: !!settings.spotifyClientSecret,
     listenbrainzTokenSet: !!settings.listenbrainzToken,
     authUsername: settings.authUsername || null,
+    albumTemplate: settings.albumTemplate,
+    singleTemplate: settings.singleTemplate,
+    defaultAlbumTemplate: DEFAULT_ALBUM_TEMPLATE,
+    defaultSingleTemplate: DEFAULT_SINGLE_TEMPLATE,
+    templateTokens: TEMPLATE_TOKENS,
+    maxConcurrentDownloads: settings.maxConcurrentDownloads,
+    maxConcurrencyLimit: MAX_CONCURRENCY_LIMIT,
+    lyrics: settings.lyrics,
+    downloadSource: settings.downloadSource,
   });
 });
 
@@ -262,7 +344,29 @@ app.post("/api/settings", (req, res) => {
     audioFormat,
     audioQuality: qualityValid ? rawQuality : DEFAULT_QUALITY[audioFormat],
     singleFiling: SINGLE_FILING_MODES.includes(body.singleFiling) ? body.singleFiling : settings.singleFiling,
+    maxConcurrentDownloads: "maxConcurrentDownloads" in body
+      ? clampConcurrency(body.maxConcurrentDownloads) : settings.maxConcurrentDownloads,
+    lyrics: LYRICS_MODES.includes(body.lyrics) ? body.lyrics : settings.lyrics,
+    downloadSource: DOWNLOAD_SOURCES.includes(body.downloadSource) ? body.downloadSource : settings.downloadSource,
   };
+
+  // A bad template is reported rather than quietly replaced with the default,
+  // so a typo does not silently refile the next download somewhere else.
+  for (const [key, fallback] of [["albumTemplate", DEFAULT_ALBUM_TEMPLATE], ["singleTemplate", DEFAULT_SINGLE_TEMPLATE]]) {
+    if (!(key in body)) continue;
+    const value = typeof body[key] === "string" ? body[key].trim() : "";
+    if (!value) { settings[key] = fallback; continue; }
+    if (!validTemplate(value)) {
+      settings = previous;
+      return res.status(400).json({
+        error: `That ${key === "albumTemplate" ? "album" : "single"} template is not usable. `
+          + `Use "/" for folders, end with {title} or {track}, and only these tokens: `
+          + TEMPLATE_TOKENS.map(t => `{${t}}`).join(" "),
+      });
+    }
+    settings[key] = value;
+  }
+
   spotifyToken = null; // credentials may have changed - drop the cached token
   try {
     persistSettings();
@@ -343,7 +447,7 @@ function runFfmpeg(args) {
 
 // Muxes the encoded audio into a new container with -c copy, so tagging never
 // re-encodes. Opus skips art regardless of canEmbedArt.
-async function embedMetadata(srcPath, destPath, format, tags, coverBuffer) {
+async function embedMetadata(srcPath, destPath, format, tags, coverBuffer, lyricsText) {
   const canEmbedArt = !!coverBuffer && SUPPORTS_EMBEDDED_ART[format];
   const coverPath = canEmbedArt ? `${srcPath}.cover.jpg` : null;
 
@@ -357,6 +461,9 @@ async function embedMetadata(srcPath, destPath, format, tags, coverBuffer) {
     if (tags.year) meta.date = tags.year;
     if (tags.genre) meta.genre = tags.genre;
     if (tags.trackNumber) meta.track = tags.trackNumber;
+    // "lyrics" is what ffmpeg maps to USLT for id3 and to a LYRICS vorbis
+    // comment for flac and opus, which is what Navidrome reads.
+    if (lyricsText) meta.lyrics = lyricsText;
     for (const [k, v] of Object.entries(meta)) args.push("-metadata", `${k}=${v}`);
     if (withArt) {
       args.push("-metadata:s:v", "title=Album cover", "-metadata:s:v", "comment=Cover (front)",
@@ -471,30 +578,53 @@ function findExistingDownload(dir, baseName) {
   return null;
 }
 
-// SAVE_DIR/Artist/Album/NN - Title.ext, or SAVE_DIR/Artist/Title.ext when no
-// album is known. This is the layout Navidrome and Jellyfin expect.
-function destDirFor(artist, album) {
-  const artistFolder = sanitizeForFilename(artist) || "Unknown Artist";
-  const albumFolder = album ? sanitizeForFilename(album) : "";
-  const dir = albumFolder
-    ? path.join(SAVE_DIR, artistFolder, albumFolder)
-    : path.join(SAVE_DIR, artistFolder);
+// Renders a template into { dir, baseName }. The album template is used when
+// the track has an album, the single template otherwise, so the two defaults
+// reproduce the old Artist/Album/NN - Title and Artist/Title layouts.
+//
+// A token that resolves to nothing leaves a dangling separator behind, so
+// "{track} - {title}" with no track number yields "Title" rather than
+// " - Title". Segments that end up empty are dropped instead of becoming an
+// empty folder name.
+function renderDestination(tags, trackNumber) {
+  const n = Number(trackNumber);
+  const values = {
+    artist: tags.artist || "",
+    album: tags.album || "",
+    title: tags.title || "",
+    track: Number.isInteger(n) && n > 0 && n < 1000 ? String(n).padStart(2, "0") : "",
+    year: tags.year || "",
+    genre: tags.genre || "",
+  };
+
+  const template = tags.album
+    ? (validTemplate(settings.albumTemplate) ? settings.albumTemplate : DEFAULT_ALBUM_TEMPLATE)
+    : (validTemplate(settings.singleTemplate) ? settings.singleTemplate : DEFAULT_SINGLE_TEMPLATE);
+
+  const segments = template.split("/").map(segment => {
+    const filled = segment.replace(/\{(\w+)\}/g, (m, key) => (key in values ? values[key] : m));
+    return sanitizeForFilename(
+      filled
+        .replace(/\s*[-_]\s*$/, "")
+        .replace(/^\s*[-_]\s*/, "")
+        .replace(/\s{2,}/g, " ")
+    );
+  }).filter(Boolean);
+
+  if (!segments.length) segments.push("Unknown Artist", "track");
+  const baseName = segments.pop() || "track";
+  const dir = path.join(SAVE_DIR, ...segments);
 
   // The write path has no equivalent of resolveLibraryPath, so it checks
   // containment itself rather than trusting the sanitizer to have caught
   // everything.
   const root = path.resolve(SAVE_DIR);
-  if (!path.resolve(dir).startsWith(root + path.sep)) {
+  const resolved = path.resolve(dir);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
     console.warn(`Refused a destination outside the library: ${dir}`);
-    return path.join(SAVE_DIR, "Unknown Artist");
+    return { dir: path.join(SAVE_DIR, "Unknown Artist"), baseName };
   }
-  return dir;
-}
-
-function buildFilename(title, trackNumber) {
-  const clean = sanitizeForFilename(title) || "track";
-  const n = Number(trackNumber);
-  return Number.isInteger(n) && n > 0 && n < 1000 ? `${String(n).padStart(2, "0")} - ${clean}` : clean;
+  return { dir, baseName };
 }
 
 // Relative to SAVE_DIR, forward slashes on any host OS. The frontend uses it
@@ -632,6 +762,9 @@ app.delete("/api/library/:relpath", (req, res) => {
     fs.unlinkSync(resolved);
     tagCache.delete(resolved);
     artCache.delete(resolved);
+    // A .lrc written alongside the track would otherwise be orphaned, and
+    // would keep the folder non-empty so the prune below skipped it.
+    try { fs.unlinkSync(resolved.replace(AUDIO_EXT_RE, ".lrc")); } catch {}
     cleanupEmptyDirs(path.dirname(resolved));
     console.log(`Deleted: ${relKey(resolved)}`);
     res.json({ ok: true });
@@ -764,13 +897,14 @@ app.get("/api/playlist/track/:id", async (req, res) => {
 // Requests enqueue and return; this worker drains the queue in the background.
 const pending = [];
 let activeJobs = 0;
-// One at a time: each job runs yt-dlp plus ffmpeg, and a burst gets throttled.
-const MAX_CONCURRENT_DOWNLOADS = 1;
+// Each job runs yt-dlp plus ffmpeg, and a burst is the quickest way to get
+// throttled, so the default stays at one and the ceiling is low.
 
 // Identifies a track by where it lands on disk, so the same song queued twice
 // resolves to one entry.
 function jobKey(tags, trackNumber) {
-  return `${destDirFor(tags.artist, tags.album)}|${buildFilename(tags.title, trackNumber)}`.toLowerCase();
+  const { dir, baseName } = renderDestination(tags, trackNumber);
+  return `${dir}|${baseName}`.toLowerCase();
 }
 
 // Queued or downloading now. The on-disk check in attemptDownload can't catch
@@ -794,7 +928,7 @@ function enqueueDownload(job) {
 }
 
 function pumpQueue() {
-  while (activeJobs < MAX_CONCURRENT_DOWNLOADS && pending.length) {
+  while (activeJobs < clampConcurrency(settings.maxConcurrentDownloads) && pending.length) {
     const { job, record, key } = pending.shift();
     activeJobs++;
     runDownloadJob(job, record)
@@ -832,19 +966,53 @@ app.post("/api/download", (req, res) => {
 });
 
 // Retried once: YouTube downloads fail transiently often enough to warrant it.
+// execa puts the exit code in message and the useful text in stderr, so a
+// bare message is "Command failed with exit code 1" plus the whole command
+// line. This pulls out yt-dlp's own ERROR line instead.
+function downloadErrorText(err) {
+  const stderr = typeof err?.stderr === "string" ? err.stderr : "";
+  const line = stderr.split(String.fromCharCode(10)).map(l => l.trim()).filter(Boolean)
+    .reverse()
+    .find(l => /^ERROR[:\s]/i.test(l));
+  // "ERROR: [soundcloud] 718846078: This video is DRM protected" becomes
+  // "This video is DRM protected".
+  if (line) {
+    return line
+      .replace(/^ERROR:?\s*/i, "")
+      .replace(/^\[[^\]]+\]\s*/, "")
+      .replace(/^[\w-]+:\s*/, "")
+      .trim();
+  }
+  return err?.shortMessage || err?.message || String(err);
+}
+
+// Retrying is only worth it for transient failures. A DRM-protected track,
+// which is most of SoundCloud's commercial catalogue, fails identically every
+// time, so it is reported straight away rather than after a second attempt.
+// The check runs over stderr too, since that is where yt-dlp says why.
+function isPermanentFailure(err) {
+  const haystack = [err?.stderr, err?.shortMessage, err?.message].filter(Boolean).join(" ");
+  return /DRM protected|is not available|Private video|members-only|removed by the uploader|Video unavailable|requested format is not available/i.test(haystack);
+}
+
 async function runDownloadJob(job, record) {
   record.status = "downloading";
   record.startedAt = Date.now();
   try {
     await attemptDownload(job, record);
   } catch (err) {
-    const message = err.shortMessage || err.message || String(err);
+    const message = downloadErrorText(err);
+    if (isPermanentFailure(err)) {
+      console.error(`Failed ("${job.query}"):`, message);
+      finishActivity(record, "failed", { error: message });
+      return;
+    }
     console.warn(`Retrying "${job.query}" after: ${message}`);
     await new Promise(r => setTimeout(r, 3000));
     try {
       await attemptDownload(job, record);
     } catch (err2) {
-      const message2 = err2.shortMessage || err2.message || String(err2);
+      const message2 = downloadErrorText(err2);
       console.error(`Failed ("${job.query}"):`, message2);
       finishActivity(record, "failed", { error: message2 });
     }
@@ -858,8 +1026,7 @@ async function attemptDownload(job, record) {
   const format = AUDIO_FORMATS.includes(settings.audioFormat) ? settings.audioFormat : "mp3";
   const quality = settings.audioQuality || DEFAULT_QUALITY[format];
 
-  const destDir = destDirFor(artist, tags.album);
-  const baseName = buildFilename(title, trackNumber);
+  const { dir: destDir, baseName } = renderDestination(tags, trackNumber);
 
   const existing = findExistingDownload(destDir, baseName);
   if (existing) {
@@ -884,7 +1051,8 @@ async function attemptDownload(job, record) {
     // FLAC has no quality knob. The others take an mp3 VBR level or a "<N>K"
     // bitrate, which ffmpeg tells apart by shape.
     if (format !== "flac" && quality) ytDlpOpts.audioQuality = quality;
-    await ytDlp(`ytsearch1:${query}`, ytDlpOpts, { env: ytDlpEnv });
+    const prefix = SOURCE_SEARCH_PREFIX[settings.downloadSource] || SOURCE_SEARCH_PREFIX.youtube;
+    await ytDlp(`${prefix}1:${query}`, ytDlpOpts, { env: ytDlpEnv });
 
     const produced = fs.readdirSync(tmpDir).find(f => f.toLowerCase().endsWith(`.${format}`));
     if (!produced) throw new Error(`Conversion did not produce a .${format} file`);
@@ -911,8 +1079,14 @@ async function attemptDownload(job, record) {
       }
     }
 
+    const lyricsMode = LYRICS_MODES.includes(settings.lyrics) ? settings.lyrics : "off";
+    const lyrics = lyricsMode === "off" ? null : await fetchLyrics(tags);
+    const embedLyrics = lyrics && (lyricsMode === "embedded" || lyricsMode === "both")
+      ? (lyrics.plainLyrics || lyrics.syncedLyrics)
+      : null;
+
     const taggedPath = path.join(tmpDir, `tagged.${format}`);
-    await embedMetadata(rawPath, taggedPath, format, tags, coverBuffer);
+    await embedMetadata(rawPath, taggedPath, format, tags, coverBuffer, embedLyrics);
 
     // Re-check before writing in case the same track landed mid-download. A
     // match means it is the same track, so drop this copy rather than saving
@@ -926,6 +1100,18 @@ async function attemptDownload(job, record) {
     }
     const destPath = path.join(destDir, `${baseName}.${format}`);
     fs.copyFileSync(taggedPath, destPath);
+
+    // A .lrc sits next to the track; music servers pick it up by filename.
+    if (lyrics && (lyricsMode === "lrc" || lyricsMode === "both")) {
+      const lrcBody = lyrics.syncedLyrics || lyrics.plainLyrics;
+      if (lrcBody) {
+        try {
+          fs.writeFileSync(path.join(destDir, `${baseName}.lrc`), lrcBody, "utf8");
+        } catch (err) {
+          console.warn(`Could not write .lrc for "${tags.title}":`, err.message || err);
+        }
+      }
+    }
 
     console.log(`Saved: ${relKey(destPath)}`);
     finishActivity(record, "completed", { filename: path.basename(destPath) });

@@ -550,6 +550,45 @@
             </select>
           </label>
           <p class="field-help">Only affects downloading one track at a time. Downloading a whole album always uses album folders. Saving as singles keeps one-off tracks searchable by song name in Navidrome/Jellyfin, instead of nested inside a one-track album.</p>
+          <label>Simultaneous downloads
+            <input type="number" id="setConcurrency" min="1" max="5" step="1">
+          </label>
+          <p class="field-help">Each download runs yt-dlp and ffmpeg, and firing several at once is the quickest way to get throttled. Raise this only if one at a time is leaving your connection idle.</p>
+        </div>
+        <div class="settings-group">
+          <h2>Library layout</h2>
+          <p class="field-help">Where downloads are filed under your music directory. Use <code>/</code> to start a folder; the last part is the filename and the extension is added for you.</p>
+          <label>Album tracks
+            <input type="text" id="setAlbumTemplate" spellcheck="false" autocomplete="off">
+          </label>
+          <label>Single tracks
+            <input type="text" id="setSingleTemplate" spellcheck="false" autocomplete="off">
+          </label>
+          <p class="field-help">Tokens: <span id="templateTokens"></span>. A token with nothing behind it is dropped along with any separator left dangling, so <code>{track} - {title}</code> on a track with no number gives just the title.</p>
+          <p class="field-help" id="templatePreview"></p>
+        </div>
+        <div class="settings-group">
+          <h2>Lyrics</h2>
+          <p class="field-help">Looked up on <a href="https://lrclib.net" target="_blank" rel="noopener">LRCLIB</a>, which needs no account. Downloads are never held up by a lyrics miss.</p>
+          <label>Fetch lyrics
+            <select id="setLyrics">
+              <option value="off">Off</option>
+              <option value="embedded">Embed in the file</option>
+              <option value="lrc">Write a .lrc file alongside</option>
+              <option value="both">Both</option>
+            </select>
+          </label>
+          <p class="field-help">A .lrc carries the timings, so lyrics scroll in Navidrome. Embedded lyrics are plain text and travel with the file.</p>
+        </div>
+        <div class="settings-group">
+          <h2>Download source</h2>
+          <label>Search
+            <select id="setDownloadSource">
+              <option value="youtube">YouTube</option>
+              <option value="soundcloud">SoundCloud</option>
+            </select>
+          </label>
+          <p class="field-help">YouTube covers far more of the commercial catalogue. SoundCloud is worth switching to for DJ sets, remixes and independent uploads that are not on YouTube, but a good share of its mainstream catalogue is DRM-protected and cannot be downloaded at all.</p>
         </div>
         <div class="settings-group">
           <h2>ListenBrainz</h2>
@@ -836,6 +875,13 @@
   const opusArtNote = document.getElementById("opusArtNote");
   const settingsSave = document.getElementById("settingsSave");
   const settingsStatus = document.getElementById("settingsStatus");
+  const setConcurrency = document.getElementById("setConcurrency");
+  const setAlbumTemplate = document.getElementById("setAlbumTemplate");
+  const setSingleTemplate = document.getElementById("setSingleTemplate");
+  const setLyrics = document.getElementById("setLyrics");
+  const setDownloadSource = document.getElementById("setDownloadSource");
+  const templateTokens = document.getElementById("templateTokens");
+  const templatePreview = document.getElementById("templatePreview");
 
   // mp3 is LAME's 0(best)-9(worst) VBR scale; opus and m4a take a bitrate;
   // flac is lossless.
@@ -888,10 +934,49 @@
       markSecretField(setSpotifySecret, data.spotifyClientSecretSet);
       setAudioFormat.value = data.audioFormat || "mp3";
       setSingleFiling.value = data.singleFiling || "single";
+      setConcurrency.max = data.maxConcurrencyLimit || 5;
+      setConcurrency.value = data.maxConcurrentDownloads || 1;
+      setAlbumTemplate.value = data.albumTemplate || "";
+      setAlbumTemplate.placeholder = data.defaultAlbumTemplate || "";
+      setSingleTemplate.value = data.singleTemplate || "";
+      setSingleTemplate.placeholder = data.defaultSingleTemplate || "";
+      setLyrics.value = data.lyrics || "off";
+      setDownloadSource.value = data.downloadSource || "youtube";
+      templateTokens.textContent = (data.templateTokens || []).map(t => `{${t}}`).join(" ");
+      renderTemplatePreview();
       renderQualityOptions(setAudioFormat.value, data.audioQuality);
     } catch (err) {
       console.warn("Could not load settings from backend:", err);
     }
+  }
+
+  // Mirrors renderDestination on the server closely enough to show what a
+  // template produces before it is saved. The server is still the authority.
+  function previewTemplate(template, sample) {
+    return template.split("/").map(seg => seg
+        .replace(/\{(\w+)\}/g, (m, k) => (k in sample ? sample[k] : m))
+        .replace(/\s*[-_]\s*$/, "")
+        .replace(/^\s*[-_]\s*/, "")
+        .replace(/\s{2,}/g, " ")
+        .replace(/[<>:"/\|?*]/g, "")
+        .trim())
+      .filter(Boolean)
+      .join("/");
+  }
+
+  function renderTemplatePreview() {
+    const album = { artist: "Michael Jackson", album: "Thriller", title: "Billie Jean", track: "07", year: "1982", genre: "Pop" };
+    const single = { artist: "Michael Jackson", album: "", title: "Billie Jean", track: "", year: "1982", genre: "Pop" };
+    const a = previewTemplate(setAlbumTemplate.value || setAlbumTemplate.placeholder, album);
+    const b = previewTemplate(setSingleTemplate.value || setSingleTemplate.placeholder, single);
+    const ext = setAudioFormat.value || "mp3";
+    templatePreview.innerHTML =
+      `Album track becomes <code>${esc(a)}.${esc(ext)}</code><br>Single becomes <code>${esc(b)}.${esc(ext)}</code>`;
+  }
+
+  for (const el of [setAlbumTemplate, setSingleTemplate, setAudioFormat]) {
+    el.addEventListener("input", renderTemplatePreview);
+    el.addEventListener("change", renderTemplatePreview);
   }
 
   // A field left untouched is omitted so the backend keeps what it has.
@@ -911,6 +996,11 @@
         audioFormat: setAudioFormat.value,
         audioQuality: setAudioQuality.value,
         singleFiling: setSingleFiling.value,
+        maxConcurrentDownloads: Number(setConcurrency.value) || 1,
+        albumTemplate: setAlbumTemplate.value,
+        singleTemplate: setSingleTemplate.value,
+        lyrics: setLyrics.value,
+        downloadSource: setDownloadSource.value,
       };
       for (const [key, input] of [
         ["listenbrainzToken", setListenbrainz],

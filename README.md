@@ -203,6 +203,14 @@ Open the **Settings** page in the app to configure:
   embed-page method. Get these free at
   [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard).
   The Client Credentials flow is read-only and never tied to a user account.
+- **Simultaneous downloads**: 1 to 5, default 1. Each job runs yt-dlp and
+  ffmpeg, and firing several at once is the quickest way to get throttled.
+- **Library layout**: the path templates described below.
+- **Lyrics**: off, embedded in the file, written as a `.lrc` alongside it, or
+  both. Looked up on [LRCLIB](https://lrclib.net), which needs no account.
+  A `.lrc` carries timings, so lyrics scroll in Navidrome. Deleting a track
+  removes its `.lrc` too.
+- **Download source**: YouTube or SoundCloud. See below.
 
 These save to `backend/settings.json`, or the `/config` volume in Docker, via
 `POST /api/settings`. Nothing needs to be hardcoded or edited in source files.
@@ -210,6 +218,42 @@ These save to `backend/settings.json`, or the `/config` volume in Docker, via
 Credentials are write-only. `GET /api/settings` reports whether each one is
 stored, never its value, so the saved fields show as blank with a "saved"
 placeholder. Type a new value to replace one, or press "Forget" to clear it.
+
+## Library layout
+
+Two templates decide where a download lands under your music directory. A `/`
+starts a folder, the last segment is the filename, and the extension is added
+for you. The defaults reproduce the layout Navidrome and Jellyfin expect:
+
+```
+album tracks   {artist}/{album}/{track} - {title}
+single tracks  {artist}/{title}
+```
+
+Available tokens are `{artist}` `{album}` `{title}` `{track}` `{year}`
+`{genre}`. The Settings page previews the result as you type.
+
+A token with no value behind it is dropped, along with any separator left
+dangling, so `{track} - {title}` on a track with no number gives `Title`
+rather than ` - Title`. A path segment that ends up empty is dropped instead
+of becoming an unnamed folder.
+
+Templates are validated on save rather than quietly corrected. A leading `/`,
+a drive letter, a backslash, `..`, an unknown token, or a template whose last
+segment has neither `{title}` nor `{track}` is rejected with an explanation,
+and your previous setting is kept. Tag values are sanitized separately, so an
+artist named `..` cannot walk the path out of the music directory.
+
+## Download source
+
+YouTube by default. SoundCloud is selectable and uses the same pipeline, since
+yt-dlp supports both and the only difference is the search prefix.
+
+SoundCloud is worth switching to for DJ sets, remixes and independent uploads
+that are not on YouTube. It is not a second attempt at the same catalogue: a
+good share of SoundCloud's commercial material is DRM-protected and cannot be
+downloaded at all. Those failures are reported immediately rather than
+retried, since they fail identically every time.
 
 ## Accounts and access
 
