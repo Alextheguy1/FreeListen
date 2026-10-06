@@ -52,7 +52,7 @@
 
   <!-- Mark and type as one block, nudged left so the pair is optically
        centred rather than the mark alone. -->
-  <g transform="translate(-68 0)">
+  <g transform="translate(-68 30)">
     <g transform="translate(330 196) scale(0.72)">
       <rect width="256" height="256" rx="56" fill="#15161c" opacity="0.55"/>
       <use href="#mark"/>
@@ -64,10 +64,5 @@
     <text x="549" y="372" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif"
           font-size="30" font-weight="400" letter-spacing="0.4" fill="#b9bcc9">Self-hosted music search and download</text>
 
-    <!-- One text run with the separators inline, so spacing follows the glyph
-         widths instead of being guessed at fixed offsets. -->
-    <text x="549" y="432" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif"
-          font-size="22" font-weight="600" letter-spacing="1.6" fill="#7e8396"
-          ><tspan>MUSICBRAINZ</tspan><tspan fill="#4a4e5e">  ·  </tspan><tspan>SPOTIFY</tspan><tspan fill="#4a4e5e">  ·  </tspan><tspan>YT-DLP</tspan><tspan fill="#4a4e5e">  ·  </tspan><tspan>NAVIDROME</tspan></text>
   </g>
 </svg>
