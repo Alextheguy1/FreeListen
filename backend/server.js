@@ -288,10 +288,16 @@ app.post("/api/auth/logout", (req, res) => {
   res.json({ ok: true });
 });
 
+// Version and commit are baked in at image build time. Without them the only
+// way to tell which build is running is to grep the served HTML for a CSS
+// rule, which is how three separate "did the update apply?" questions went.
+const VERSION = require("./package.json").version;
+const BUILD_COMMIT = process.env.BUILD_COMMIT || "dev";
+
 // Liveness probe for container healthchecks. Touches no disk and no upstream
 // API, so it reports on this server rather than on MusicBrainz.
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true, queued: pending.length, active: activeJobs });
+  res.json({ ok: true, version: VERSION, commit: BUILD_COMMIT, queued: pending.length, active: activeJobs });
 });
 
 // Never returns the saved credentials, only whether each one is set. The UI
@@ -1120,4 +1126,23 @@ async function attemptDownload(job, record) {
   }
 }
 
-app.listen(PORT, () => console.log(`Download backend listening on http://localhost:${PORT}`));
+// Only listen when started directly, so the test suite can require this file
+// for its pure helpers without a server appearing on a port.
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`Download backend listening on http://localhost:${PORT}`));
+}
+
+module.exports = {
+  app,
+  allowedCoverArtUrl,
+  sanitizeForFilename,
+  validTemplate,
+  renderDestination,
+  clampConcurrency,
+  isPermanentFailure,
+  downloadErrorText,
+  hashPassword,
+  // renderDestination reads the live settings object, so tests need a way to
+  // choose templates without going through the HTTP API.
+  _setSettingsForTest: patch => { settings = { ...settings, ...patch }; },
+};

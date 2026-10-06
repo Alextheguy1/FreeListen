@@ -1,12 +1,13 @@
 {
   "name": "freelisten-backend",
-  "version": "1.0.0",
+  "version": "1.1.2",
   "private": true,
   "description": "Backend for FreeListen: resolves a song via yt-dlp's own YouTube search, converts it to a tagged audio file, and saves it to disk.",
   "main": "server.js",
   "scripts": {
     "postinstall": "node scripts/setup-deno.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test"
   },
   "dependencies": {
     "express": "^4.19.2",

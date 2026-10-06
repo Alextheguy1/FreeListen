@@ -38,11 +38,12 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
-            type=sha,prefix=,format=short
 
       - uses: docker/build-push-action@v6
         with:
           context: .
+          build-args: |
+            BUILD_COMMIT=${{ github.sha }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}

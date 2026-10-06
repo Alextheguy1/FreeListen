@@ -39,6 +39,10 @@ COPY playlist-backend/ ./playlist-backend/
 
 COPY supervisord.conf /etc/supervisor/conf.d/freelisten.conf
 
+# Stamped by the workflow so /api/health can say which build this is.
+ARG BUILD_COMMIT=dev
+ENV BUILD_COMMIT=$BUILD_COMMIT
+
 ENV PORT=5051
 ENV MUSIC_DIR=/music
 ENV CONFIG_DIR=/config

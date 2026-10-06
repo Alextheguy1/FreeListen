@@ -12,6 +12,7 @@
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
   <img src="https://img.shields.io/badge/arch-amd64%20%7C%20arm64-blue" alt="amd64 and arm64">
   <img src="https://img.shields.io/badge/TrueNAS-community%20catalog-0095D5" alt="TrueNAS community catalog">
+  <img src="https://github.com/Alextheguy1/FreeListen/actions/workflows/test.yml/badge.svg" alt="Tests">
 </p>
 
 <p align="center">

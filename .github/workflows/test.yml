@@ -1,0 +1,30 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # The postinstall scripts fetch yt-dlp, Deno and ffmpeg, which the tests
+      # never invoke. Skipping them keeps this job to a few seconds.
+      - name: Install dependencies
+        working-directory: backend
+        env:
+          YOUTUBE_DL_SKIP_DOWNLOAD: "true"
+          FFMPEG_SKIP_DOWNLOAD: "true"
+        run: npm install --ignore-scripts --omit=dev
+
+      - name: Run tests
+        working-directory: backend
+        run: npm test
