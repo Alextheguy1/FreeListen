@@ -1,4 +1,6 @@
-# FreeListen
+<p align="center">
+  <img src="assets/banner.png" alt="FreeListen" width="880">
+</p>
 
 A self-hosted web app that searches the [MusicBrainz](https://musicbrainz.org)
 database for songs, albums, and artists, or loads a public Spotify playlist,

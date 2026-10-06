@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-label="FreeListen: self-hosted music search and download">
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2a2d3a"/>
+      <stop offset="1" stop-color="#15161c"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f08fc8"/>
+      <stop offset="1" stop-color="#ba478f"/>
+    </linearGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f8b4dc"/>
+      <stop offset="0.55" stop-color="#f08fc8"/>
+      <stop offset="1" stop-color="#ba478f"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.44" r="0.62">
+      <stop offset="0" stop-color="#f08fc8" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#f08fc8" stop-opacity="0"/>
+    </radialGradient>
+    <!-- The icon's own mark, reused at banner scale. -->
+    <g id="mark">
+      <g fill="none" stroke="url(#accent)" stroke-width="15"
+         stroke-linecap="round" stroke-linejoin="round">
+        <path d="M104 170V74l76-14v96"/>
+        <circle cx="84" cy="170" r="21" fill="url(#accent)" stroke="none"/>
+        <circle cx="160" cy="156" r="21" fill="url(#accent)" stroke="none"/>
+      </g>
+      <g fill="none" stroke="#ffffff" stroke-width="13"
+         stroke-linecap="round" stroke-linejoin="round" opacity="0.92">
+        <path d="M52 196v12a12 12 0 0 0 12 12h40"/>
+        <path d="M52 120v44"/>
+        <path d="M36 150l16 16 16-16"/>
+      </g>
+    </g>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#ground)"/>
+  <rect width="1280" height="640" fill="url(#glow)"/>
+
+  <!-- A waveform carrying the note's rhythm out to both edges, which is the
+       part that turns a square mark into something banner-shaped. -->
+  <g stroke="url(#accent)" stroke-linecap="round" opacity="0.22">
+    <g stroke-width="5">
+      <path d="M60 320v-14M94 320v-30M128 320v-52M162 320v-26M196 320v-44M230 320v-18"/>
+      <path d="M1050 320v-18M1084 320v-44M1118 320v-26M1152 320v-52M1186 320v-30M1220 320v-14"/>
+    </g>
+    <g stroke-width="5">
+      <path d="M60 320v14M94 320v30M128 320v52M162 320v26M196 320v44M230 320v18"/>
+      <path d="M1050 320v18M1084 320v44M1118 320v26M1152 320v52M1186 320v30M1220 320v14"/>
+    </g>
+  </g>
+
+  <!-- Mark and type as one block, nudged left so the pair is optically
+       centred rather than the mark alone. -->
+  <g transform="translate(-68 0)">
+    <g transform="translate(330 196) scale(0.72)">
+      <rect width="256" height="256" rx="56" fill="#15161c" opacity="0.55"/>
+      <use href="#mark"/>
+    </g>
+
+    <text x="545" y="316" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif"
+          font-size="104" font-weight="700" letter-spacing="-2.5" fill="url(#word)">FreeListen</text>
+
+    <text x="549" y="372" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif"
+          font-size="30" font-weight="400" letter-spacing="0.4" fill="#b9bcc9">Self-hosted music search and download</text>
+
+    <!-- One text run with the separators inline, so spacing follows the glyph
+         widths instead of being guessed at fixed offsets. -->
+    <text x="549" y="432" font-family="Segoe UI, Inter, Helvetica Neue, Arial, sans-serif"
+          font-size="22" font-weight="600" letter-spacing="1.6" fill="#7e8396"
+          ><tspan>MUSICBRAINZ</tspan><tspan fill="#4a4e5e">  ·  </tspan><tspan>SPOTIFY</tspan><tspan fill="#4a4e5e">  ·  </tspan><tspan>YT-DLP</tspan><tspan fill="#4a4e5e">  ·  </tspan><tspan>NAVIDROME</tspan></text>
+  </g>
+</svg>
