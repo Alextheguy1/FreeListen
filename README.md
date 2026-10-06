@@ -1,19 +1,42 @@
-# FreeListen
+<p align="center">
+  <img src="assets/banner.png" alt="FreeListen" width="760">
+</p>
 
-A self-hosted web app that searches the [MusicBrainz](https://musicbrainz.org)
-database for songs, albums, and artists, or loads a public Spotify playlist,
-then downloads tagged audio files to a directory you choose. Play counts come
-from [ListenBrainz](https://listenbrainz.org) and cover art from the
-[Cover Art Archive](https://coverartarchive.org). Search, the download queue,
-and the library view are all one web UI.
+<p align="center">
+  Search <a href="https://musicbrainz.org">MusicBrainz</a> or a public Spotify playlist,
+  and save tagged audio files straight into your music library.<br>
+  Self-hosted, no accounts, no indexers to configure.
+</p>
 
-![license](https://img.shields.io/badge/license-MIT-green)
+<p align="center">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
+  <img src="https://img.shields.io/badge/arch-amd64%20%7C%20arm64-blue" alt="amd64 and arm64">
+  <img src="https://img.shields.io/badge/TrueNAS-community%20catalog-0095D5" alt="TrueNAS community catalog">
+</p>
 
-## Pages
+<p align="center">
+  <img src="assets/screenshot1.png" alt="Search results" width="860">
+</p>
 
-Four pages, reachable from the sidebar: **Search**, **Activity** (live download
-queue and history), **Library** (everything saved to disk, with delete), and
-**Settings**.
+## Quick start
+
+```bash
+docker run -d --name freelisten \
+  -p 5051:5051 \
+  -v /path/to/your/music:/music \
+  -v /path/to/config:/config \
+  ghcr.io/alextheguy1/freelisten:latest
+```
+
+Open `http://your-host:5051`, create an account on first run, and search.
+Nothing else is required: no API keys, no indexers, no Spotify account.
+
+On **TrueNAS SCALE** it is in the community catalog, so install it from
+**Apps → Discover Apps** instead. Docker Compose and non-Docker instructions
+are further down.
+
+Four pages in the sidebar: **Search**, **Activity** (live download queue and
+history), **Library** (what is saved, with delete), and **Settings**.
 
 ## Features
 
